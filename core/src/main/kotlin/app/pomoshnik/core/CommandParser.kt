@@ -18,7 +18,7 @@ object CommandParser {
     private val timerRx = rx("$L(?:таймер[\\p{L}\\p{N}_]*|засеки)$R")
     private val alarmRx = rx("$L(?:будильник[\\p{L}\\p{N}_]*|разбуди[\\p{L}\\p{N}_]*|подними\\s+меня|подъем)$R")
     private val eventStrongRx = rx("$L(?:в\\s+календар[\\p{L}\\p{N}_]*|календар[\\p{L}\\p{N}_]*|событи[\\p{L}\\p{N}_]*|мероприяти[\\p{L}\\p{N}_]*|запланируй[\\p{L}\\p{N}_]*)$R")
-    private val taskRx = rx("$L(?:задач[\\p{L}\\p{N}_]*|напомни[\\p{L}\\p{N}_]*|напоминани[\\p{L}\\p{N}_]*|список\\s+дел|в\\s+дела)$R")
+    private val taskRx = rx("$L(?:задач[\\p{L}\\p{N}_]*|напомни[\\p{L}\\p{N}_]*|напоминани[\\p{L}\\p{N}_]*|заметк[\\p{L}\\p{N}_]*|список\\s+дел|в\\s+дела)$R")
     private val eventWeakRx = rx(
         "$L(?:встреч[\\p{L}\\p{N}_]*|созвон[\\p{L}\\p{N}_]*|звонок|прием[\\p{L}\\p{N}_]*|собрани[\\p{L}\\p{N}_]*|день\\s+рождения|свидани[\\p{L}\\p{N}_]*|" +
             "конференци[\\p{L}\\p{N}_]*|вебинар[\\p{L}\\p{N}_]*|совещани[\\p{L}\\p{N}_]*|планерк[\\p{L}\\p{N}_]*|занятие|тренировк[\\p{L}\\p{N}_]*|концерт[\\p{L}\\p{N}_]*|визит[\\p{L}\\p{N}_]*)$R"
@@ -32,7 +32,7 @@ object CommandParser {
             "(?:поставь|добавь|создай|заведи|сделай)(?:те)?\\s+(?:новую\\s+)?(?:задачу|событие|напоминание)",
             "(?:новая|новую)\\s+(?:задача|задачу)",
             "напомни(?:те)?(?:\\s+(?:мне|нам))?", "напоминание",
-            "задачу", "задача", "событие",
+            "(?:в\\s+)?заметк[\\p{L}\\p{N}_]*", "задачу", "задача", "событие",
             "запланируй(?:те)?", "запиши(?:те)?", "добавь(?:те)?", "создай(?:те)?", "поставь(?:те)?",
             "пожалуйста",
         ).joinToString("|") + ")$R"
@@ -64,7 +64,7 @@ object CommandParser {
             eventStrongRx.containsMatchIn(text) -> Kind.EVENT
             taskRx.containsMatchIn(text) -> Kind.TASK
             eventWeakRx.containsMatchIn(text) -> Kind.EVENT
-            else -> return InfoParser.parse(text, input, now) ?: Command.Unknown(input)
+            else -> return InfoParser.parse(text, input, now) ?: implicitTask(text, input, now)
         }
 
         return when (kind) {
@@ -122,6 +122,17 @@ object CommandParser {
         if (date == null && time != null) date = nextDateFor(time, now)
         val title = makeTitle(ex.rest) ?: return Command.Unknown(input, "Не понял текст задачи")
         return Command.CreateTask(title, date, time)
+    }
+
+    /**
+     * A phrase with no command word but with a date or time ("завтра в 13 купить воды")
+     * is most likely a to-do, so it becomes a task.
+     */
+    private fun implicitTask(text: String, input: String, now: LocalDateTime): Command {
+        val ex = DateTimeExtractor(now).extract(text, preferPm = true, wantDuration = false)
+        val hasWhen = ex.date != null || ex.time != null || ex.relative != null || ex.partOfDay != null
+        if (!hasWhen) return Command.Unknown(input)
+        return parseTask(text, input, now).takeIf { it is Command.CreateTask } ?: Command.Unknown(input)
     }
 
     /** Today if the time is still ahead, otherwise tomorrow. */

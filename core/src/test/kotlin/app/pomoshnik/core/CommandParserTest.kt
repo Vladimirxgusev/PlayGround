@@ -98,6 +98,24 @@ class CommandParserTest {
         parse("поставь задачу продлить страховку через неделю"),
     )
 
+    @Test fun noteIsTask() = assertEquals(
+        Command.CreateTask("Купи воды", today.plusDays(1), LocalTime.of(13, 0)),
+        parse("создай заметку на завтра 13:00 купи воды"),
+    )
+
+    @Test fun noteNoDate() =
+        assertEquals(Command.CreateTask("Позвонить в банк"), parse("заметка позвонить в банк"))
+
+    @Test fun implicitTaskWithTime() = assertEquals(
+        Command.CreateTask("Купить воды", today.plusDays(1), LocalTime.of(13, 0)),
+        parse("завтра в 13 купить воды"),
+    )
+
+    @Test fun implicitTaskEvening() = assertEquals(
+        Command.CreateTask("Забрать посылку", today, LocalTime.of(19, 0)),
+        parse("забрать посылку вечером"),
+    )
+
     // --- Events ---
 
     @Test fun eventMeetingThursday() = assertEquals(
