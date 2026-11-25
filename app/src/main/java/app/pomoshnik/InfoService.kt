@@ -43,8 +43,9 @@ class InfoService(private val context: Context, private val settings: Settings) 
         if (date.isBefore(today)) throw IOException("прогноз бывает только на будущее")
         if (date.isAfter(today.plusDays(6))) throw IOException("прогноз есть только на неделю вперёд")
 
+        val city = c.city
         val place = when {
-            c.city != null -> findCity(c.city) ?: throw IOException("не нашёл город «${c.city}»")
+            city != null -> findCity(city) ?: throw IOException("не нашёл город «$city»")
             else -> currentPlace()
                 ?: settings.homeCity.takeIf { it.isNotBlank() }?.let { findCity(it) }
                 ?: throw IOException("не знаю, где вы. Разрешите доступ к местоположению или укажите город в настройках")
