@@ -22,6 +22,10 @@ object AiFallback {
         val durationMinutes: Int? = null,
         val days: List<String>? = null,
         val timerSeconds: Int? = null,
+        val city: String? = null,
+        val currencies: List<String>? = null,
+        val amount: Double? = null,
+        val answer: String? = null,
     )
 
     private val weekdayNames = listOf(
@@ -39,21 +43,40 @@ object AiFallback {
 
             Поля:
             - "type": одно из "alarm" (будильник), "timer" (таймер), "event" (событие в календаре),
-              "task" (задача или напоминание), "unknown" (команда не про это);
+              "task" (задача или напоминание), "weather" (вопрос о погоде), "currency" (курс валют),
+              "question" (любой другой вопрос или просьба), "unknown" (непонятно);
             - "title": короткое название задачи или события в именительном падеже, с заглавной буквы,
               без слов-команд ("напомни", "добавь", "создай"); для будильника и таймера — подпись или null;
             - "date": дата в формате YYYY-MM-DD или null;
             - "time": время в формате HH:MM (24 часа) или null;
             - "duration_minutes": длительность события в минутах или null;
             - "days": для повторяющегося будильника массив из "MON","TUE","WED","THU","FRI","SAT","SUN", иначе null;
-            - "timer_seconds": длительность таймера в секундах или null.
+            - "timer_seconds": длительность таймера в секундах или null;
+            - "city": для погоды город в именительном падеже или null (null = там, где пользователь);
+            - "currencies": для курса массив кодов ISO ("USD", "EUR", "CNY" ...) или null;
+            - "amount": для курса сумма в валюте, которую надо перевести в рубли, или null;
+            - "answer": для question — короткий ответ по-русски, 1–3 предложения, без markdown.
 
             Правила:
             - "напомни ..." — это task; встречи, приёмы, дни рождения, мероприятия — event;
             - относительные даты ("завтра", "в пятницу", "через неделю") считай от текущей даты;
             - если время сказано без "утра/вечера" и речь о встрече или делах, выбирай разумное
               дневное время (например, "в 3" — это 15:00);
-            - событие без времени — это событие на весь день (time = null).
+            - событие без времени — это событие на весь день (time = null);
+            - на вопросы о погоде и курсах НЕ отвечай сам: верни weather или currency, данные подставит приложение;
+            - если не знаешь точного ответа на question, так и скажи.
+        """.trimIndent()
+    }
+
+    /** Prompt for answering a free-form question directly. */
+    fun answerPrompt(now: LocalDateTime): String {
+        val date = now.toLocalDate().format(DateTimeFormatter.ISO_LOCAL_DATE)
+        val weekday = weekdayNames[now.dayOfWeek.value - 1]
+        return """
+            Ты — голосовой помощник «Секретутка» на телефоне. Сегодня $date, $weekday.
+            Отвечай по-русски коротко и по делу: 1–3 предложения, без markdown и списков,
+            так, чтобы ответ было удобно прослушать. Если не знаешь точного ответа или он зависит
+            от свежих данных, честно скажи об этом.
         """.trimIndent()
     }
 
@@ -86,7 +109,14 @@ object AiFallback {
                 }
                 Command.CreateTask(t, d, time)
             }
-            else -> Command.Unknown(original, "Это не похоже на команду для будильника, календаря или задач")
+            "weather" -> Command.Weather(a.city?.trim()?.takeIf { it.isNotEmpty() && it.lowercase() != "null" }, date)
+            "currency" -> {
+                val codes = a.currencies.orEmpty().map { it.trim().uppercase() }.filter { it.length == 3 }
+                Command.Currency(codes.ifEmpty { listOf("USD", "EUR", "CNY") }, a.amount?.takeIf { it > 0 })
+            }
+            "question" -> a.answer?.trim()?.takeIf { it.isNotEmpty() }?.let { Command.Answer(it) }
+                ?: Command.Question(original)
+            else -> Command.Unknown(original, "Не понял, что нужно сделать")
         }
     }
 

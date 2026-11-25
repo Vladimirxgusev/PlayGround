@@ -66,7 +66,8 @@ private val examples = listOf(
     "Поставь будильник на 7:30",
     "Напомни завтра в 10 позвонить маме",
     "Встреча с врачом в четверг в 14:00",
-    "Таймер на 15 минут",
+    "Какая погода завтра?",
+    "Курс доллара",
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -89,7 +90,7 @@ fun MainScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Помощник") },
+                title = { Text("Секретутка") },
                 actions = {
                     IconButton(onClick = onSettings) { Icon(Icons.Filled.Settings, contentDescription = "Настройки") }
                 },
@@ -227,6 +228,8 @@ fun SettingsScreen(
     var folderId by remember { mutableStateOf(settings.yandexFolderId) }
     var model by remember { mutableStateOf(settings.yandexModel) }
     var listenOnOpen by remember { mutableStateOf(settings.listenOnOpen) }
+    var speakAnswers by remember { mutableStateOf(settings.speakAnswers) }
+    var homeCity by remember { mutableStateOf(settings.homeCity) }
     var calendarId by remember { mutableStateOf(settings.calendarId) }
     var calendars by remember { mutableStateOf(loadCalendars()) }
 
@@ -234,6 +237,7 @@ fun SettingsScreen(
         settings.yandexApiKey = apiKey
         settings.yandexFolderId = folderId
         settings.yandexModel = model
+        settings.homeCity = homeCity
         onBack()
     }
 
@@ -258,7 +262,7 @@ fun SettingsScreen(
         ) {
             Text("Помощник по умолчанию", style = MaterialTheme.typography.titleMedium)
             Text(
-                "Чтобы вызывать «Помощника» удержанием кнопки питания, выберите его в " +
+                "Чтобы вызывать «Секретутку» удержанием кнопки питания, выберите его в " +
                     "Настройки → Приложения → Приложения по умолчанию → Цифровой помощник.",
                 style = MaterialTheme.typography.bodyMedium,
             )
@@ -284,6 +288,22 @@ fun SettingsScreen(
                 })
             }
 
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Озвучивать ответы (погода, курсы, вопросы)", modifier = Modifier.weight(1f))
+                Switch(checked = speakAnswers, onCheckedChange = {
+                    speakAnswers = it
+                    settings.speakAnswers = it
+                })
+            }
+            OutlinedTextField(
+                value = homeCity,
+                onValueChange = { homeCity = it },
+                label = { Text("Город для погоды") },
+                supportingText = { Text("Если пусто — по местоположению телефона") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+
             HorizontalDivider()
             Text("Календарь для событий", style = MaterialTheme.typography.titleMedium)
             if (calendars.isEmpty()) {
@@ -304,7 +324,7 @@ fun SettingsScreen(
             }
 
             HorizontalDivider()
-            Text("ИИ для сложных фраз (YandexGPT)", style = MaterialTheme.typography.titleMedium)
+            Text("ИИ для сложных фраз и вопросов (YandexGPT)", style = MaterialTheme.typography.titleMedium)
             Text(
                 "Простые команды понимаются без интернета. Фразы, которые правила не поняли, " +
                     "отправляются в YandexGPT — он работает в России без VPN. " +

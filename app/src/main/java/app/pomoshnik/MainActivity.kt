@@ -26,6 +26,7 @@ import androidx.lifecycle.lifecycleScope
 import app.pomoshnik.core.AiFallback
 import app.pomoshnik.core.Command
 import app.pomoshnik.core.CommandParser
+import app.pomoshnik.core.InfoFormat
 import kotlinx.coroutines.launch
 import java.time.LocalDateTime
 
@@ -45,6 +46,9 @@ class MainActivity : ComponentActivity() {
     private lateinit var actions: Actions
     private lateinit var speech: SpeechInput
     private lateinit var googleTasks: GoogleTasks
+    private lateinit var info: InfoService
+    private lateinit var speaker: Speaker
+    private var pendingWeather: Pair<String, Command.Weather>? = null
 
     // UI state
     val history = mutableStateListOf<Entry>()
@@ -73,6 +77,12 @@ class MainActivity : ComponentActivity() {
             addEntry(said, outcome, pendingViaAi)
         }
 
+    private val locationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) {
+        val (said, weather) = pendingWeather ?: return@registerForActivityResult
+        pendingWeather = null
+        answer(said, pendingViaAi) { info.weather(weather) }
+    }
+
     private val googleConsent =
         registerForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { res ->
             googleTasks.onConsentResult(res.data)
@@ -91,6 +101,8 @@ class MainActivity : ComponentActivity() {
         settings = Settings(this)
         actions = Actions(this, settings)
         googleTasks = GoogleTasks(this).also { it.attach(googleConsent) }
+        info = InfoService(this, settings)
+        speaker = Speaker(this)
         speech = SpeechInput(
             context = this,
             onPartial = { partial = it },
@@ -144,6 +156,11 @@ class MainActivity : ComponentActivity() {
         speech.stop()
     }
 
+    override fun onDestroy() {
+        super.onDestroy()
+        speaker.shutdown()
+    }
+
     private fun handleLaunchIntent(intent: Intent?, firstLaunch: Boolean) {
         val action = intent?.action
         val voiceLaunch = action == Intent.ACTION_ASSIST || action == Intent.ACTION_VOICE_COMMAND ||
@@ -161,6 +178,7 @@ class MainActivity : ComponentActivity() {
             return
         }
         partial = ""
+        speaker.stop()
         if (speech.isAvailable) {
             speech.start()
         } else {
@@ -219,6 +237,28 @@ class MainActivity : ComponentActivity() {
                 addEntry(said, outcome, viaAi)
             }
             is Command.Unknown -> addEntry(said, Outcome(false, command.reason), viaAi)
+            is Command.Now -> answer(said, viaAi) { InfoFormat.now(command.kind, LocalDateTime.now()) }
+            is Command.Currency -> answer(said, viaAi) { info.rates(command) }
+            is Command.Answer -> answer(said, viaAi = true) { command.text }
+            is Command.Question -> if (settings.aiConfigured) {
+                answer(said, viaAi = true) {
+                    YandexGpt.complete(settings, AiFallback.answerPrompt(LocalDateTime.now()), command.text).trim()
+                }
+            } else {
+                addEntry(said, Outcome(false, "Чтобы отвечать на любые вопросы, подключите YandexGPT в настройках"), viaAi)
+            }
+            is Command.Weather -> {
+                val needLocation = command.city == null && settings.homeCity.isBlank() &&
+                    ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) !=
+                    PackageManager.PERMISSION_GRANTED
+                if (needLocation) {
+                    pendingWeather = said to command
+                    pendingViaAi = viaAi
+                    locationPermission.launch(Manifest.permission.ACCESS_COARSE_LOCATION)
+                } else {
+                    answer(said, viaAi) { info.weather(command) }
+                }
+            }
             is Command.CreateEvent -> {
                 val granted = ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_CALENDAR) ==
                     PackageManager.PERMISSION_GRANTED &&
@@ -234,6 +274,22 @@ class MainActivity : ComponentActivity() {
                     )
                 }
             }
+        }
+    }
+
+    /** Fetches an answer, shows it and (if enabled) reads it aloud. */
+    private fun answer(said: String, viaAi: Boolean, fetch: suspend () -> String) {
+        lifecycleScope.launch {
+            busy = true
+            val outcome = try {
+                Outcome(true, fetch())
+            } catch (e: Exception) {
+                Outcome(false, "Не получилось ответить: ${e.message}")
+            } finally {
+                busy = false
+            }
+            addEntry(said, outcome, viaAi)
+            if (settings.speakAnswers) speaker.speak(outcome.message)
         }
     }
 

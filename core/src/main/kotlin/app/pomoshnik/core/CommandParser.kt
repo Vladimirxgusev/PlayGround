@@ -64,7 +64,7 @@ object CommandParser {
             eventStrongRx.containsMatchIn(text) -> Kind.EVENT
             taskRx.containsMatchIn(text) -> Kind.TASK
             eventWeakRx.containsMatchIn(text) -> Kind.EVENT
-            else -> return Command.Unknown(input)
+            else -> return InfoParser.parse(text, input, now) ?: Command.Unknown(input)
         }
 
         return when (kind) {

@@ -20,9 +20,24 @@ android {
         versionName = "0.1.$buildNumber"
     }
 
+    // CI signs every build with the same cached key (see .github/workflows/android.yml),
+    // so new APKs install over old ones and the Google sign-in fingerprint stays the same.
+    val stableKeystore = System.getenv("SEKRETUTKA_KEYSTORE")?.let { file(it) }?.takeIf { it.exists() }
+    signingConfigs {
+        if (stableKeystore != null) {
+            create("stable") {
+                storeFile = stableKeystore
+                storePassword = "sekretutka"
+                keyAlias = "sekretutka"
+                keyPassword = "sekretutka"
+            }
+        }
+    }
+
     buildTypes {
         debug {
             isMinifyEnabled = false
+            if (stableKeystore != null) signingConfig = signingConfigs.getByName("stable")
         }
     }
 

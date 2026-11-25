@@ -33,6 +33,23 @@ sealed interface Command {
         val time: LocalTime? = null,
     ) : Command
 
+    /** Weather for [city] (null = current location) on [date] (null = now/today). */
+    data class Weather(val city: String? = null, val date: LocalDate? = null) : Command
+
+    /** Central Bank of Russia rates for ISO [codes]; [amount] converts that many units to roubles. */
+    data class Currency(val codes: List<String>, val amount: Double? = null) : Command
+
+    /** Current time or date. */
+    data class Now(val kind: Kind) : Command {
+        enum class Kind { TIME, DATE }
+    }
+
+    /** A free-form question for the AI. */
+    data class Question(val text: String) : Command
+
+    /** A ready answer (from the AI) to show and speak. */
+    data class Answer(val text: String) : Command
+
     /** Not understood. [reason] is shown to the user when no AI fallback is available. */
     data class Unknown(val text: String, val reason: String = "Не понял команду") : Command
 }

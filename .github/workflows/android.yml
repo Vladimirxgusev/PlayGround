@@ -33,8 +33,18 @@ jobs:
       - name: Restore signing key
         uses: actions/cache@v4
         with:
-          path: ~/.android/debug.keystore
-          key: pomoshnik-debug-keystore-v1
+          path: ~/.sekretutka/signing.jks
+          key: sekretutka-signing-key-v1
+
+      - name: Create signing key on first build
+        run: |
+          mkdir -p ~/.sekretutka
+          if [ ! -f ~/.sekretutka/signing.jks ]; then
+            keytool -genkeypair -keystore ~/.sekretutka/signing.jks -alias sekretutka \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass sekretutka -keypass sekretutka -dname "CN=Sekretutka"
+          fi
+          echo "SEKRETUTKA_KEYSTORE=$HOME/.sekretutka/signing.jks" >> "$GITHUB_ENV"
 
       - name: Test command parser
         run: ./gradlew :core:test --console=plain
@@ -45,8 +55,8 @@ jobs:
       # Google Cloud needs this fingerprint for the Android OAuth client (Google Tasks sign-in).
       - name: Show signing fingerprint
         run: |
-          SHA1=$(keytool -list -v -keystore ~/.android/debug.keystore -alias androiddebugkey \
-            -storepass android -keypass android | grep -m1 "SHA1:" | sed 's/.*SHA1: *//')
+          SHA1=$(keytool -list -v -keystore ~/.sekretutka/signing.jks -alias sekretutka \
+            -storepass sekretutka | grep -m1 "SHA1:" | sed 's/.*SHA1: *//')
           echo "SHA-1: $SHA1"
           {
             echo "### Для Google Cloud (OAuth-клиент Android)"
@@ -55,10 +65,10 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Rename APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk "pomoshnik-${GITHUB_RUN_NUMBER}.apk"
+        run: cp app/build/outputs/apk/debug/app-debug.apk "sekretutka-${GITHUB_RUN_NUMBER}.apk"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: pomoshnik-apk
-          path: pomoshnik-*.apk
+          name: sekretutka-apk
+          path: sekretutka-*.apk
           if-no-files-found: error

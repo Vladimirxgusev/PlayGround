@@ -39,6 +39,11 @@ object Describe {
             if (c.date != null) append(" — ").append(date(c.date, today))
             if (c.time != null) append(", ").append(time(c.time))
         }
+        is Command.Weather -> "Погода" + (c.city?.let { " — $it" } ?: "")
+        is Command.Currency -> "Курс " + c.codes.joinToString(", ")
+        is Command.Now -> if (c.kind == Command.Now.Kind.TIME) "Время" else "Дата"
+        is Command.Question -> c.text
+        is Command.Answer -> c.text
         is Command.Unknown -> c.reason
     }
 
