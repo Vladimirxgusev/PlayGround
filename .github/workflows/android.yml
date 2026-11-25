@@ -13,7 +13,8 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  # write: to save the encrypted signing key into the repository once (see below).
+  contents: write
 
 jobs:
   build:
@@ -28,23 +29,56 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
-      # Keep the same debug signing key between builds so new APKs install
-      # over the old one instead of requiring an uninstall.
-      - name: Restore signing key
+      # Every build must be signed with the same key, or Android refuses to install an
+      # update over the old app (and the Google sign-in fingerprint would change).
+      # Where the key comes from, in order:
+      #   1. signing/sekretutka.p12 in the repo, encrypted with the SIGNING_PASSWORD secret
+      #      (permanent; the repository is public, so the key is only ever stored encrypted);
+      #   2. the GitHub Actions cache (GitHub drops it after 7 days without builds);
+      #   3. a brand-new key on the very first build.
+      # Once SIGNING_PASSWORD is set, the cached key is encrypted and committed (step 1).
+      - name: Restore signing key from cache
         uses: actions/cache@v4
         with:
           path: ~/.sekretutka/signing.jks
           key: sekretutka-signing-key-v1
 
-      - name: Create signing key on first build
+      - name: Prepare signing key
+        env:
+          SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
         run: |
           mkdir -p ~/.sekretutka
-          if [ ! -f ~/.sekretutka/signing.jks ]; then
-            keytool -genkeypair -keystore ~/.sekretutka/signing.jks -alias sekretutka \
+          KS="$HOME/.sekretutka/signing.jks"
+          if [ -f signing/sekretutka.p12 ] && [ -n "$SIGNING_PASSWORD" ]; then
+            rm -f "$KS"
+            keytool -importkeystore -noprompt \
+              -srckeystore signing/sekretutka.p12 -srcstoretype PKCS12 -srcstorepass "$SIGNING_PASSWORD" \
+              -destkeystore "$KS" -deststoretype PKCS12 -deststorepass sekretutka
+            echo "Signing key: encrypted copy from the repository"
+          elif [ -f signing/sekretutka.p12 ] && [ ! -f "$KS" ]; then
+            echo "::error::signing/sekretutka.p12 exists but the SIGNING_PASSWORD secret is not set"
+            exit 1
+          elif [ -f "$KS" ]; then
+            echo "Signing key: GitHub Actions cache"
+          else
+            keytool -genkeypair -keystore "$KS" -alias sekretutka \
               -keyalg RSA -keysize 2048 -validity 10000 \
               -storepass sekretutka -keypass sekretutka -dname "CN=Sekretutka"
+            echo "Signing key: newly generated"
           fi
-          echo "SEKRETUTKA_KEYSTORE=$HOME/.sekretutka/signing.jks" >> "$GITHUB_ENV"
+
+          if [ ! -f signing/sekretutka.p12 ] && [ -n "$SIGNING_PASSWORD" ]; then
+            if [ "${#SIGNING_PASSWORD}" -lt 20 ]; then
+              echo "::error::SIGNING_PASSWORD is shorter than 20 characters; use a long random password"
+              exit 1
+            fi
+            mkdir -p signing
+            keytool -importkeystore -noprompt \
+              -srckeystore "$KS" -srcstorepass sekretutka \
+              -destkeystore signing/sekretutka.p12 -deststoretype PKCS12 -deststorepass "$SIGNING_PASSWORD"
+            echo "SAVE_SIGNING_KEY=1" >> "$GITHUB_ENV"
+          fi
+          echo "SEKRETUTKA_KEYSTORE=$KS" >> "$GITHUB_ENV"
 
       - name: Test command parser
         run: ./gradlew :core:test --console=plain
@@ -63,6 +97,15 @@ jobs:
             echo "- Имя пакета: \`app.pomoshnik\`"
             echo "- SHA-1: \`$SHA1\`"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Save encrypted signing key to the repository
+        if: env.SAVE_SIGNING_KEY == '1'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add signing/sekretutka.p12
+          git commit -m "Save encrypted signing key"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
 
       - name: Rename APK
         run: cp app/build/outputs/apk/debug/app-debug.apk "sekretutka-${GITHUB_RUN_NUMBER}.apk"
