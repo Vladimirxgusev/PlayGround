@@ -22,6 +22,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -197,7 +198,9 @@ private fun EntryCard(entry: Entry, onUndo: (Entry) -> Unit) {
                     tint = if (entry.ok) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
                 )
                 Spacer(Modifier.width(8.dp))
-                Text(entry.result, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+                SelectionContainer(Modifier.weight(1f)) {
+                    Text(entry.result, style = MaterialTheme.typography.bodyLarge)
+                }
             }
             if (entry.viaAi || entry.undo != null) {
                 Row(verticalAlignment = Alignment.CenterVertically) {

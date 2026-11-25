@@ -97,6 +97,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        installCrashReporter()
         enableEdgeToEdge()
         settings = Settings(this)
         actions = Actions(this, settings)
@@ -143,7 +144,13 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        if (savedInstanceState == null) handleLaunchIntent(intent, firstLaunch = true)
+        val crash = getSharedPreferences(CRASH_PREFS, MODE_PRIVATE).getString("last", null)
+        if (crash != null) {
+            getSharedPreferences(CRASH_PREFS, MODE_PRIVATE).edit().remove("last").apply()
+            addInfo("В прошлый раз приложение закрылось из-за ошибки. Пришлите этот текст разработчику:\n$crash")
+        } else if (savedInstanceState == null) {
+            handleLaunchIntent(intent, firstLaunch = true)
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -308,7 +315,29 @@ class MainActivity : ComponentActivity() {
         history.add(0, Entry(nextId++, "", message, ok = false))
     }
 
+    /** Saves the stack trace of a crash so the next launch can show it. */
+    private fun installCrashReporter() {
+        val previous = Thread.getDefaultUncaughtExceptionHandler()
+        if (previous is CrashSaver) return
+        Thread.setDefaultUncaughtExceptionHandler(CrashSaver(applicationContext, previous))
+    }
+
+    private class CrashSaver(
+        private val context: android.content.Context,
+        private val previous: Thread.UncaughtExceptionHandler?,
+    ) : Thread.UncaughtExceptionHandler {
+        override fun uncaughtException(t: Thread, e: Throwable) {
+            runCatching {
+                val trace = e.stackTraceToString().lines().take(25).joinToString("\n")
+                context.getSharedPreferences(CRASH_PREFS, MODE_PRIVATE).edit()
+                    .putString("last", "версия ${BuildConfig.VERSION_NAME}\n$trace").commit()
+            }
+            previous?.uncaughtException(t, e)
+        }
+    }
+
     companion object {
+        private const val CRASH_PREFS = "crash"
         const val ACTION_LISTEN = "app.pomoshnik.LISTEN"
     }
 }

@@ -13,35 +13,35 @@ import kotlin.math.roundToInt
 internal object InfoParser {
 
     private val weatherRx = rx(
-        "$L(?:погод\\w*|температур\\w*|прогноз\\w*|дожд\\w*|снег\\w*|зонт\\w*|холодно|тепло|жарко|градус\\w*)$R"
+        "$L(?:погод[\\p{L}\\p{N}_]*|температур[\\p{L}\\p{N}_]*|прогноз[\\p{L}\\p{N}_]*|дожд[\\p{L}\\p{N}_]*|снег[\\p{L}\\p{N}_]*|зонт[\\p{L}\\p{N}_]*|холодно|тепло|жарко|градус[\\p{L}\\p{N}_]*)$R"
     )
     private val timeRx = rx("$L(?:который\\s+час|сколько\\s+времени|какое\\s+(?:сейчас\\s+)?время)$R")
     private val dateRx = rx(
         "$L(?:какое\\s+(?:сегодня\\s+)?число|какая\\s+(?:сегодня\\s+)?дата|какой\\s+(?:сегодня\\s+)?день(?:\\s+недели)?|" +
             "какое\\s+сегодня|что\\s+за\\s+день)$R"
     )
-    private val ratesRx = rx("$L(?:курс\\w*\\s+валют|валют\\w*)$R")
-    private val currencyAskRx = rx("$L(?:курс\\w*|сколько|почем|стоит|в\\s+рубл\\w*|рубл\\w*)$R")
+    private val ratesRx = rx("$L(?:курс[\\p{L}\\p{N}_]*\\s+валют|валют[\\p{L}\\p{N}_]*)$R")
+    private val currencyAskRx = rx("$L(?:курс[\\p{L}\\p{N}_]*|сколько|почем|стоит|в\\s+рубл[\\p{L}\\p{N}_]*|рубл[\\p{L}\\p{N}_]*)$R")
     private val questionStartRx = rx(
-        "^(?:а\\s+)?(?:что|кто|как|какой|какая|какое|какие|каков\\w*|почему|зачем|сколько|где|куда|откуда|когда|" +
+        "^(?:а\\s+)?(?:что|кто|как|какой|какая|какое|какие|каков[\\p{L}\\p{N}_]*|почему|зачем|сколько|где|куда|откуда|когда|" +
             "чем|чей|чья|ли|расскажи|объясни|скажи|подскажи|посоветуй|переведи|придумай)$R"
     )
 
     /** Currency words → ISO codes, checked in order. */
     private val currencies = listOf(
-        "доллар\\w*|бакс\\w*" to "USD",
+        "доллар[\\p{L}\\p{N}_]*|бакс[\\p{L}\\p{N}_]*" to "USD",
         "евро" to "EUR",
-        "юан\\w*" to "CNY",
-        "фунт\\w*" to "GBP",
-        "иен\\w*|йен\\w*" to "JPY",
-        "франк\\w*" to "CHF",
-        "лир\\w*" to "TRY",
+        "юан[\\p{L}\\p{N}_]*" to "CNY",
+        "фунт[\\p{L}\\p{N}_]*" to "GBP",
+        "иен[\\p{L}\\p{N}_]*|йен[\\p{L}\\p{N}_]*" to "JPY",
+        "франк[\\p{L}\\p{N}_]*" to "CHF",
+        "лир[\\p{L}\\p{N}_]*" to "TRY",
         "тенге" to "KZT",
-        "белорусск\\w+\\s+рубл\\w*" to "BYN",
-        "гривн\\w*" to "UAH",
-        "дирхам\\w*" to "AED",
-        "сум\\w*" to "UZS",
-        "драм\\w*" to "AMD",
+        "белорусск[\\p{L}\\p{N}_]+\\s+рубл[\\p{L}\\p{N}_]*" to "BYN",
+        "гривн[\\p{L}\\p{N}_]*" to "UAH",
+        "дирхам[\\p{L}\\p{N}_]*" to "AED",
+        "сум[\\p{L}\\p{N}_]*" to "UZS",
+        "драм[\\p{L}\\p{N}_]*" to "AMD",
         "лари" to "GEL",
     ).map { (p, code) -> rx("$L(?:$p)$R") to code }
 
@@ -73,8 +73,8 @@ internal object InfoParser {
     private val amountRx = Regex("(?<![\\p{L}\\d])(\\d+(?:[.,]\\d+)?)\\s*(?=\\p{L})")
 
     // Case-sensitive on purpose: speech recognition capitalises city names.
-    private val cityCapsRx = Regex("(?U)(?<![\\p{L}\\d])(?:в|во|для)\\s+(\\p{Lu}[\\p{L}-]*(?:\\s+\\p{Lu}[\\p{L}-]*)?)")
-    private val cityAnyRx = Regex("(?iU)(?<![\\p{L}\\d])(?:в|во|для)\\s+([\\p{L}-]{3,})")
+    private val cityCapsRx = Regex("(?<![\\p{L}\\d])(?:в|во|для)\\s+(\\p{Lu}[\\p{L}-]*(?:\\s+\\p{Lu}[\\p{L}-]*)?)")
+    private val cityAnyRx = Regex("(?<![\\p{L}\\d])(?:в|во|для)\\s+([\\p{L}-]{3,})", RegexOption.IGNORE_CASE)
 
     private fun city(rest: String): String? {
         cityCapsRx.find(rest)?.let { return it.groupValues[1] }

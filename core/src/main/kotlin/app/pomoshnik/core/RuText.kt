@@ -6,7 +6,9 @@ internal object RuText {
     const val L = "(?<![\\p{L}\\d])"
     const val R = "(?![\\p{L}\\d])"
 
-    fun rx(pattern: String): Regex = Regex("(?iU)$pattern")
+    // No inline flags such as (?U): Android's ICU regex rejects them and the app crashes.
+    // IGNORE_CASE is Unicode-aware on both the JVM (Kotlin adds UNICODE_CASE) and Android.
+    fun rx(pattern: String): Regex = Regex(pattern, RegexOption.IGNORE_CASE)
 
     /** Keeps letter case (names in titles), unifies ё and punctuation. */
     fun normalize(input: String): String = input

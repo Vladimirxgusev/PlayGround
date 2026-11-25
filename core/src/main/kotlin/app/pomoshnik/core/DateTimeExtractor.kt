@@ -43,9 +43,9 @@ internal class DateTimeExtractor(private val now: LocalDateTime) {
 
     /** Words after a number that mean it is a count, not an hour ("на 5 человек"). */
     private val countNouns =
-        "человек\\w*|штук\\w*|рубл\\w*|процент\\w*|раз|мест\\w*|кг|км|грамм\\w*|литр\\w*|" +
-            "доллар\\w*|евро|лет|год\\w*|минут\\w*|секунд\\w*|дн(?:я|ей)|недел\\w*|месяц\\w*|" +
-            "этаж\\w*|класс\\w*|кв\\w*|страниц\\w*|част\\w*"
+        "человек[\\p{L}\\p{N}_]*|штук[\\p{L}\\p{N}_]*|рубл[\\p{L}\\p{N}_]*|процент[\\p{L}\\p{N}_]*|раз|мест[\\p{L}\\p{N}_]*|кг|км|грамм[\\p{L}\\p{N}_]*|литр[\\p{L}\\p{N}_]*|" +
+            "доллар[\\p{L}\\p{N}_]*|евро|лет|год[\\p{L}\\p{N}_]*|минут[\\p{L}\\p{N}_]*|секунд[\\p{L}\\p{N}_]*|дн(?:я|ей)|недел[\\p{L}\\p{N}_]*|месяц[\\p{L}\\p{N}_]*|" +
+            "этаж[\\p{L}\\p{N}_]*|класс[\\p{L}\\p{N}_]*|кв[\\p{L}\\p{N}_]*|страниц[\\p{L}\\p{N}_]*|част[\\p{L}\\p{N}_]*"
 
     private val months = listOf(
         "январ" to 1, "феврал" to 2, "март" to 3, "апрел" to 4, "ма" to 5, "июн" to 6,
@@ -60,7 +60,7 @@ internal class DateTimeExtractor(private val now: LocalDateTime) {
         "воскресен" to DayOfWeek.SUNDAY,
     )
     private val weekdayWords =
-        "понедельник\\w*|вторник\\w*|сред[уаы]|четверг\\w*|пятниц[уаы]|суббот[уаы]|воскресень[еяю]"
+        "понедельник[\\p{L}\\p{N}_]*|вторник[\\p{L}\\p{N}_]*|сред[уаы]|четверг[\\p{L}\\p{N}_]*|пятниц[уаы]|суббот[уаы]|воскресень[еяю]"
 
     private var text = ""
 
@@ -143,7 +143,7 @@ internal class DateTimeExtractor(private val now: LocalDateTime) {
 
         // "в пятницу", "в следующий вторник"
         if (date == null) {
-            take("$L(?:(?:в|во|на|к)\\s+)?(?:(следующ\\w+|эт[уио]\\w*)\\s+)?($weekdayWords)$R")?.let { m ->
+            take("$L(?:(?:в|во|на|к)\\s+)?(?:(следующ[\\p{L}\\p{N}_]+|эт[уио][\\p{L}\\p{N}_]*)\\s+)?($weekdayWords)$R")?.let { m ->
                 val target = weekdayOf(m.groupValues[2])!!
                 val today = now.toLocalDate()
                 var ahead = (target.value - today.dayOfWeek.value + 7) % 7
@@ -181,7 +181,7 @@ internal class DateTimeExtractor(private val now: LocalDateTime) {
         if (time == null) {
             val rxHour = rx(
                 "$L(?:в|на|к|до|около)\\s+($n|час)$R(?:\\s*(?:час(?:а|ов)?|ч)$R)?" +
-                    "(?:\\s+($n)\\s*минут\\w*)?(?:\\s+$mod$R)?(?!\\s*(?:$countNouns)$R)"
+                    "(?:\\s+($n)\\s*минут[\\p{L}\\p{N}_]*)?(?:\\s+$mod$R)?(?!\\s*(?:$countNouns)$R)"
             )
             time = firstTime(rxHour, part, preferPm)
         }
