@@ -44,6 +44,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var settings: Settings
     private lateinit var actions: Actions
     private lateinit var speech: SpeechInput
+    private lateinit var googleTasks: GoogleTasks
 
     // UI state
     val history = mutableStateListOf<Entry>()
@@ -72,6 +73,11 @@ class MainActivity : ComponentActivity() {
             addEntry(said, outcome, pendingViaAi)
         }
 
+    private val googleConsent =
+        registerForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { res ->
+            googleTasks.onConsentResult(res.data)
+        }
+
     /** Used only when in-app recognition is unavailable: the system speech dialog. */
     private val speechDialog = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { res ->
         listening = false
@@ -84,6 +90,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         settings = Settings(this)
         actions = Actions(this, settings)
+        googleTasks = GoogleTasks(this).also { it.attach(googleConsent) }
         speech = SpeechInput(
             context = this,
             onPartial = { partial = it },
@@ -200,7 +207,17 @@ class MainActivity : ComponentActivity() {
         when (command) {
             is Command.SetAlarm -> addEntry(said, actions.setAlarm(command), viaAi)
             is Command.SetTimer -> addEntry(said, actions.setTimer(command), viaAi)
-            is Command.CreateTask -> addEntry(said, actions.createTask(command), viaAi)
+            is Command.CreateTask -> lifecycleScope.launch {
+                busy = true
+                val outcome = try {
+                    googleTasks.create(command)
+                } catch (e: Exception) {
+                    actions.createTaskViaClipboard(command, e.message ?: "неизвестная ошибка")
+                } finally {
+                    busy = false
+                }
+                addEntry(said, outcome, viaAi)
+            }
             is Command.Unknown -> addEntry(said, Outcome(false, command.reason), viaAi)
             is Command.CreateEvent -> {
                 val granted = ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_CALENDAR) ==

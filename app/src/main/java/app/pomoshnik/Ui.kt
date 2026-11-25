@@ -115,7 +115,7 @@ fun MainScreen(
             }
 
             val status = when {
-                activity.busy -> "Спрашиваю YandexGPT…"
+                activity.busy -> "Выполняю…"
                 activity.listening && activity.partial.isNotEmpty() -> activity.partial
                 activity.listening -> "Слушаю…"
                 else -> ""

@@ -105,22 +105,14 @@ class Actions(private val activity: Activity, private val settings: Settings) {
         return launch(intent, "Открыл календарь, проверьте и сохраните событие", "Не нашёл приложение календаря")
     }
 
-    /**
-     * Google Tasks has no on-device API; writing to it needs a Google sign-in (next stage).
-     * Until then, copy the text and open the Tasks app.
-     */
-    fun createTask(c: Command.CreateTask): Outcome {
-        val text = Describe.command(c).removePrefix("Задача ")
+    /** Fallback when Google Tasks cannot be reached: copy the text and open the Tasks app. */
+    fun createTaskViaClipboard(c: Command.CreateTask, problem: String): Outcome {
         val clipboard = activity.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         clipboard.setPrimaryClip(ClipData.newPlainText("Задача", c.title))
         val launchTasks = activity.packageManager.getLaunchIntentForPackage(TASKS_PACKAGE)
         if (launchTasks != null) activity.startActivity(launchTasks)
-        val tail = if (launchTasks != null) "открыл Google Задачи — вставьте текст" else "приложение Google Задачи не найдено"
-        return Outcome(
-            true,
-            "Задача $text\nПрямая запись в Google Задачи появится в следующей версии. " +
-                "Пока текст скопирован, $tail.",
-        )
+        val tail = if (launchTasks != null) "Текст скопирован, открыл Google Задачи — вставьте его." else "Текст скопирован."
+        return Outcome(false, "Не удалось записать в Google Задачи: $problem.\n$tail")
     }
 
     fun listCalendars(): List<CalendarInfo> {
