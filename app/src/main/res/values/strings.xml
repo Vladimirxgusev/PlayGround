@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Помощник</string>
+    <string name="shortcut_listen_short">Сказать</string>
+    <string name="shortcut_listen_long">Сказать команду</string>
+</resources>

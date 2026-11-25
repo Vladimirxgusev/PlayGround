@@ -16,3 +16,16 @@
 - 👤 [Explore the creator's projects](https://go.ondev.store/Vladimirxgusev).
 - 🌍 [Create with OMGithub](https://go.ondev.store/).
 <!-- omgithub:readme:end -->
+
+## Помощник — голосовой ассистент для Android
+
+Приложение принимает голосовые команды на русском и:
+- ставит будильники и таймеры в стандартных «Часах»;
+- создаёт события в Google Календаре (через календарь телефона);
+- готовит задачи для Google Задач (прямая запись — следующий этап).
+
+Простые фразы разбираются правилами без интернета (`core/`), остальные — через YandexGPT,
+если в настройках указаны API-ключ и ID каталога Yandex Cloud.
+
+**Сборка:** APK собирает GitHub Actions (workflow «Android APK»), файл лежит в артефакте
+`pomoshnik-apk` у последнего запуска. Тесты разбора команд: `./gradlew :core:test`.
