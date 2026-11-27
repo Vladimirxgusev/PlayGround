@@ -4,7 +4,16 @@ import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.provider.Settings as AndroidSettings
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -41,7 +50,10 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LargeFloatingActionButton
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Surface
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -56,22 +68,25 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 
 private val examples = listOf(
-    "Поставь будильник на 7:30",
-    "Напомни завтра в 10 позвонить маме",
-    "Встреча с врачом в четверг в 14:00",
-    "Какая погода завтра?",
-    "Курс доллара",
+    "Будильник" to "Поставь будильник на 7:30",
+    "Напоминание" to "Напомни завтра в 10 позвонить маме",
+    "Погода" to "Какая погода завтра?",
+    "Курс доллара" to "Курс доллара",
 )
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun MainScreen(
     activity: MainActivity,
@@ -80,98 +95,134 @@ fun MainScreen(
     onUndo: (Entry) -> Unit,
     onSettings: () -> Unit,
 ) {
-    var input by remember { mutableStateOf("") }
+    var input by rememberSaveable { mutableStateOf("") }
+    val colors = MaterialTheme.colorScheme
+    val canSend = input.isNotBlank() && !activity.busy
     val send = {
-        if (input.isNotBlank()) {
+        if (canSend) {
             onSend(input)
             input = ""
         }
     }
 
     Scaffold(
+        containerColor = Color.Transparent,
+        modifier = Modifier.background(Brush.verticalGradient(listOf(colors.primaryContainer, colors.background))),
         topBar = {
             TopAppBar(
-                title = { Text("Секретутка") },
+                title = { Text("Секретутка", fontWeight = FontWeight.SemiBold) },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
                 actions = {
                     IconButton(onClick = onSettings) { Icon(Icons.Filled.Settings, contentDescription = "Настройки") }
                 },
             )
         },
     ) { padding ->
-        Column(
-            Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .imePadding(),
-        ) {
-            LazyColumn(
-                modifier = Modifier.weight(1f).fillMaxWidth(),
-                contentPadding = PaddingValues(16.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-                reverseLayout = true,
-            ) {
-                items(activity.history, key = { it.id }) { entry -> EntryCard(entry, onUndo) }
+        Box(Modifier.fillMaxSize().padding(padding).imePadding(), contentAlignment = Alignment.TopCenter) {
+            Column(Modifier.widthIn(max = 560.dp).fillMaxSize()) {
                 if (activity.history.isEmpty()) {
-                    item { Hints(onExample = { onSend(it) }) }
-                }
-            }
-
-            val status = when {
-                activity.busy -> "Выполняю…"
-                activity.listening && activity.partial.isNotEmpty() -> activity.partial
-                activity.listening -> "Слушаю…"
-                else -> ""
-            }
-            if (status.isNotEmpty()) {
-                Row(
-                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    if (activity.busy) {
-                        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-                        Spacer(Modifier.width(8.dp))
+                    LazyColumn(
+                        modifier = Modifier.weight(1f).fillMaxWidth(),
+                        contentPadding = PaddingValues(horizontal = 24.dp, vertical = 16.dp),
+                        verticalArrangement = Arrangement.Center,
+                    ) {
+                        item {
+                            Text("Чем помочь?", style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.SemiBold)
+                            Spacer(Modifier.height(12.dp))
+                        }
+                        item {
+                            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                examples.forEach { (label, example) ->
+                                    FilterChip(
+                                        selected = input == example,
+                                        onClick = { input = example },
+                                        label = { Text(label) },
+                                        shape = CircleShape,
+                                    )
+                                }
+                            }
+                        }
                     }
-                    Text(status, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.primary)
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.weight(1f).fillMaxWidth(),
+                        contentPadding = PaddingValues(horizontal = 18.dp, vertical = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                        reverseLayout = true,
+                    ) {
+                        items(activity.history, key = { it.id }) { entry -> EntryCard(entry, onUndo) }
+                    }
+                }
+
+                val status = when {
+                    activity.busy -> "Выполняю…"
+                    activity.listening && activity.partial.isNotEmpty() -> activity.partial
+                    activity.listening -> "Слушаю…"
+                    else -> ""
+                }
+                Surface(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp),
+                    shape = RoundedCornerShape(30.dp),
+                    color = colors.surface.copy(alpha = 0.88f),
+                    tonalElevation = 3.dp,
+                ) {
+                    Column(Modifier.padding(10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                        if (status.isNotEmpty()) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                if (activity.busy) {
+                                    CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                                    Spacer(Modifier.width(8.dp))
+                                }
+                                Text(status, style = MaterialTheme.typography.bodyMedium, color = colors.primary)
+                            }
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            val micSize by animateDpAsState(
+                                if (activity.listening) 58.dp else 50.dp,
+                                animationSpec = spring(stiffness = 500f),
+                                label = "Микрофон",
+                            )
+                            IconButton(
+                                onClick = onMic,
+                                enabled = !activity.busy || activity.listening,
+                                modifier = Modifier.size(micSize)
+                                    .background(Brush.linearGradient(listOf(colors.primary, colors.tertiary)), CircleShape)
+                                    .border(1.dp, colors.onPrimary.copy(alpha = 0.32f), CircleShape),
+                            ) {
+                                Icon(
+                                    if (activity.listening) Icons.Filled.Stop else Icons.Filled.Mic,
+                                    contentDescription = if (activity.listening) "Остановить" else "Сказать команду",
+                                    tint = colors.onPrimary.copy(alpha = if (activity.busy && !activity.listening) 0.55f else 1f),
+                                )
+                            }
+                            Spacer(Modifier.width(8.dp))
+                            OutlinedTextField(
+                                value = input,
+                                onValueChange = { input = it },
+                                modifier = Modifier.weight(1f),
+                                placeholder = { Text("Напиши команду") },
+                                singleLine = true,
+                                shape = CircleShape,
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedContainerColor = colors.surfaceVariant.copy(alpha = 0.45f),
+                                    unfocusedContainerColor = colors.surfaceVariant.copy(alpha = 0.30f),
+                                    unfocusedBorderColor = Color.Transparent,
+                                ),
+                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                                keyboardActions = KeyboardActions(onSend = { send() }),
+                            )
+                            if (input.isNotEmpty()) {
+                                IconButton(onClick = send, enabled = canSend) {
+                                    Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Отправить")
+                                }
+                            }
+                        }
+                    }
                 }
             }
-
-            Box(Modifier.fillMaxWidth().padding(vertical = 8.dp), contentAlignment = Alignment.Center) {
-                LargeFloatingActionButton(onClick = onMic) {
-                    Icon(
-                        if (activity.listening) Icons.Filled.Stop else Icons.Filled.Mic,
-                        contentDescription = if (activity.listening) "Остановить" else "Сказать команду",
-                        modifier = Modifier.size(36.dp),
-                    )
-                }
-            }
-
-            Row(
-                Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, bottom = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                OutlinedTextField(
-                    value = input,
-                    onValueChange = { input = it },
-                    modifier = Modifier.weight(1f),
-                    placeholder = { Text("Или напишите команду") },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                    keyboardActions = KeyboardActions(onSend = { send() }),
-                )
-                IconButton(onClick = send, enabled = input.isNotBlank() && !activity.busy) {
-                    Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Отправить")
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun Hints(onExample: (String) -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text("Нажмите на микрофон и скажите, например:", style = MaterialTheme.typography.titleMedium)
-        examples.forEach { ex ->
-            OutlinedButton(onClick = { onExample(ex) }, modifier = Modifier.fillMaxWidth()) { Text(ex) }
         }
     }
 }
@@ -180,9 +231,9 @@ private fun Hints(onExample: (String) -> Unit) {
 private fun EntryCard(entry: Entry, onUndo: (Entry) -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(24.dp),
         colors = CardDefaults.cardColors(
-            containerColor = if (entry.ok) MaterialTheme.colorScheme.secondaryContainer
-            else MaterialTheme.colorScheme.surfaceVariant,
+            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.88f),
         ),
     ) {
         Column(Modifier.padding(14.dp)) {

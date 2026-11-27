@@ -5,7 +5,6 @@ import android.app.Activity
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
-import android.os.Build
 import android.os.Bundle
 import android.speech.RecognizerIntent
 import androidx.activity.ComponentActivity
@@ -13,14 +12,13 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.ui.graphics.Color
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.dynamicDarkColorScheme
-import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
@@ -120,12 +118,26 @@ class MainActivity : ComponentActivity() {
         )
 
         setContent {
-            val dark = isSystemInDarkTheme()
-            val colors = when {
-                Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ->
-                    if (dark) dynamicDarkColorScheme(this) else dynamicLightColorScheme(this)
-                dark -> darkColorScheme()
-                else -> lightColorScheme()
+            val colors = if (isSystemInDarkTheme()) {
+                darkColorScheme(
+                    primary = Color(0xFFAAC8FF),
+                    onPrimary = Color(0xFF0C2350),
+                    tertiary = Color(0xFFB6AAFF),
+                    primaryContainer = Color(0xFF202E50),
+                    background = Color(0xFF101522),
+                    surface = Color(0xFF1B2336),
+                    surfaceVariant = Color(0xFF303A50),
+                )
+            } else {
+                lightColorScheme(
+                    primary = Color(0xFF315AC2),
+                    onPrimary = Color.White,
+                    tertiary = Color(0xFF6545BF),
+                    primaryContainer = Color(0xFFE0E8FF),
+                    background = Color(0xFFF5F7FF),
+                    surface = Color(0xFFFCFCFF),
+                    surfaceVariant = Color(0xFFE3E8F5),
+                )
             }
             MaterialTheme(colorScheme = colors) {
                 if (showSettings) {

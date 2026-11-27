@@ -2,15 +2,22 @@ package app.pomoshnik.wear
 
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.content.res.ColorStateList
+import android.graphics.Color
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.RippleDrawable
 import android.net.Uri
 import android.os.Bundle
 import android.provider.AlarmClock
 import android.speech.RecognizerIntent
 import android.text.InputFilter
 import android.view.Gravity
+import android.view.View
 import android.view.WindowInsets
 import android.widget.Button
 import android.widget.EditText
+import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -39,7 +46,11 @@ class WatchActivity : ComponentActivity(), DataClient.OnDataChangedListener {
     private val data by lazy { Wearable.getDataClient(this) }
     private lateinit var input: EditText
     private lateinit var status: TextView
-    private lateinit var mic: Button
+    private lateinit var mic: ImageButton
+    private lateinit var title: TextView
+    private lateinit var type: Button
+    private lateinit var cancel: Button
+    private var editing = false
     private lateinit var send: Button
     private var sending = false
     private var command: Command? = null
@@ -48,6 +59,7 @@ class WatchActivity : ComponentActivity(), DataClient.OnDataChangedListener {
         if (result.resultCode == RESULT_OK && pendingId() == null) {
             val text = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()
             if (!text.isNullOrBlank()) {
+                editing = true
                 input.setText(text)
                 input.setSelection(input.length())
             }
@@ -56,45 +68,81 @@ class WatchActivity : ComponentActivity(), DataClient.OnDataChangedListener {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        editing = savedInstanceState?.getBoolean("editing") == true || store.contains("text")
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_HORIZONTAL
-            val width = resources.displayMetrics.widthPixels
-            val side = if (resources.configuration.isScreenRound) width / 6 else width / 16
-            setPadding(side, width / 7, side, width / 7)
-        }
-        content.addView(TextView(this).apply {
-            text = "Секретутка"
-            textSize = 18f
             gravity = Gravity.CENTER
-        })
-        mic = Button(this).apply {
-            isAllCaps = false
-            text = "Продиктовать"
+            val width = resources.displayMetrics.widthPixels
+            val side = if (resources.configuration.isScreenRound) width / 6 else dp(12)
+            val vertical = if (resources.configuration.isScreenRound) width / 7 else dp(12)
+            setPadding(side, vertical, side, vertical)
+            isFocusableInTouchMode = true
+        }
+        title = TextView(this).apply {
+            text = "Чем помочь?"
+            textSize = 17f
+            setTextColor(INK)
+            setTypeface(typeface, Typeface.BOLD)
+            gravity = Gravity.CENTER
+        }
+        content.addView(title)
+        mic = ImageButton(this).apply {
+            contentDescription = "Продиктовать команду"
+            setImageResource(R.drawable.ic_watch_mic)
+            scaleType = android.widget.ImageView.ScaleType.CENTER
+            background = capsule(intArrayOf(0xFF3865DA.toInt(), 0xFF7853D8.toInt()))
             setOnClickListener { dictate() }
         }
-        content.addView(mic)
+        content.addView(mic, LinearLayout.LayoutParams(dp(58), dp(58)).apply { topMargin = dp(8) })
+        type = commandButton("Ввести текст") {
+            editing = true
+            updateControls()
+            input.requestFocus()
+            input.windowInsetsController?.show(WindowInsets.Type.ime())
+        }
+        content.addView(type, controlLayout())
         input = EditText(this).apply {
-            hint = "Скажи или напиши"
-            textSize = 15f
+            id = R.id.watch_command
+            hint = "Команда"
+            textSize = 14f
+            gravity = Gravity.CENTER
+            setTextColor(INK)
+            setHintTextColor(MUTED)
+            background = capsule(intArrayOf(PANEL, PANEL))
+            setPadding(dp(10), dp(7), dp(10), dp(7))
+            minHeight = dp(48)
             filters = arrayOf(InputFilter.LengthFilter(WatchTaskSync.MAX_TEXT_LENGTH))
             maxLines = 3
             setText(store.getString("text", null))
         }
-        content.addView(input, LinearLayout.LayoutParams(-1, -2))
-        send = Button(this).apply {
-            isAllCaps = false
-            setOnClickListener { confirmCommand() }
-        }
-        content.addView(send)
+        content.addView(input, controlLayout())
+        send = commandButton("", primary = true) { confirmCommand() }
+        content.addView(send, controlLayout())
         status = TextView(this).apply {
+            textSize = 12f
+            setTextColor(MUTED)
             gravity = Gravity.CENTER
-            accessibilityLiveRegion = android.view.View.ACCESSIBILITY_LIVE_REGION_POLITE
+            accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
             text = store.getString("status", "")
+            visibility = if (text.isEmpty()) View.GONE else View.VISIBLE
+            doAfterTextChanged { visibility = if (it.isNullOrEmpty()) View.GONE else View.VISIBLE }
         }
-        content.addView(status)
+        content.addView(status, controlLayout())
+        cancel = commandButton("Назад") {
+            editing = false
+            store.edit().remove("text").remove("status").apply()
+            input.text.clear()
+            input.clearFocus()
+            input.windowInsetsController?.hide(WindowInsets.Type.ime())
+            updateControls()
+        }
+        content.addView(cancel, controlLayout())
         val scroll = ScrollView(this).apply {
             isFillViewport = true
+            background = GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                intArrayOf(0xFF222D50.toInt(), 0xFF101522.toInt(), 0xFF101522.toInt()),
+            )
             addView(content)
             setOnApplyWindowInsetsListener { view, insets ->
                 val safe = insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
@@ -115,6 +163,36 @@ class WatchActivity : ComponentActivity(), DataClient.OnDataChangedListener {
         }
         refreshCommand()
     }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putBoolean("editing", editing)
+        super.onSaveInstanceState(outState)
+    }
+
+    private fun controlLayout() = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(5) }
+
+    private fun commandButton(label: String, primary: Boolean = false, action: () -> Unit) =
+        Button(this).apply {
+            isAllCaps = false
+            text = label
+            textSize = 13f
+            minHeight = dp(48)
+            setTextColor(INK)
+            background = capsule(
+                if (primary) intArrayOf(0xFF335ABF.toInt(), 0xFF5E47B1.toInt())
+                else intArrayOf(PANEL, PANEL),
+            )
+            setPadding(dp(8), dp(4), dp(8), dp(4))
+            setOnClickListener { action() }
+        }
+
+    private fun capsule(colors: IntArray) = RippleDrawable(
+        ColorStateList.valueOf(0x33FFFFFF),
+        GradientDrawable(GradientDrawable.Orientation.TL_BR, colors).apply { cornerRadius = dp(30).toFloat() },
+        null,
+    )
+
+    private fun dp(value: Int) = (value * resources.displayMetrics.density + 0.5f).toInt()
 
     override fun onStart() {
         super.onStart()
@@ -179,6 +257,7 @@ class WatchActivity : ComponentActivity(), DataClient.OnDataChangedListener {
     private fun openClock(intent: Intent) {
         try {
             startActivity(intent.putExtra(AlarmClock.EXTRA_SKIP_UI, true))
+            editing = false
             input.text.clear()
             store.edit().remove("text").remove("status").apply()
             status.text = "Команда передана в «Часы»."
@@ -240,7 +319,10 @@ class WatchActivity : ComponentActivity(), DataClient.OnDataChangedListener {
         val update = store.edit().remove("id").remove("enteredAt").remove("requestUri").putString("status", message)
         if (success) update.remove("text")
         if (!update.commit()) return
-        if (success) input.text.clear()
+        if (success) {
+            editing = false
+            input.text.clear()
+        }
         refreshCommand()
         status.text = message
         requestUri?.let { data.deleteDataItems(it) }
@@ -256,7 +338,12 @@ class WatchActivity : ComponentActivity(), DataClient.OnDataChangedListener {
 
     private fun updateControls() {
         val pending = pendingId() != null
-        mic.isEnabled = !pending && !sending
+        val reviewing = editing || pending
+        title.visibility = if (reviewing) View.GONE else View.VISIBLE
+        mic.visibility = if (reviewing) View.GONE else View.VISIBLE
+        type.visibility = if (reviewing) View.GONE else View.VISIBLE
+        input.visibility = if (reviewing) View.VISIBLE else View.GONE
+        cancel.visibility = if (editing && !pending && !sending) View.VISIBLE else View.GONE
         input.isEnabled = !pending && !sending
         val label = when {
             pending -> "Повторить отправку"
@@ -268,5 +355,12 @@ class WatchActivity : ComponentActivity(), DataClient.OnDataChangedListener {
         send.visibility = if (label != null) android.view.View.VISIBLE else android.view.View.GONE
         send.isEnabled = !sending
         send.text = label.orEmpty()
+        send.alpha = if (sending) 0.6f else 1f
+    }
+
+    private companion object {
+        val INK = Color.rgb(246, 248, 255)
+        val MUTED = Color.rgb(189, 202, 228)
+        val PANEL = Color.rgb(43, 56, 87)
     }
 }
