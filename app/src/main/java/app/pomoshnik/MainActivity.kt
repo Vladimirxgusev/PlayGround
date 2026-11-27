@@ -14,7 +14,10 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.ui.graphics.Color
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -29,6 +32,7 @@ import app.pomoshnik.core.Command
 import app.pomoshnik.core.CommandParser
 import app.pomoshnik.core.InfoFormat
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.first
 import java.time.LocalDateTime
 
 /** One line in the history: what was said and what happened. */
@@ -41,7 +45,10 @@ data class Entry(
     val undo: (() -> String)? = null,
 )
 
-class MainActivity : ComponentActivity() {
+open class MainActivity : ComponentActivity() {
+
+    protected open val launchesAsPanel = false
+    private var compactPanel by mutableStateOf(false)
 
     private lateinit var settings: Settings
     private lateinit var actions: Actions
@@ -109,6 +116,12 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (!launchesAsPanel && isVoiceInvocation(intent?.action)) {
+            openAssistPanel(intent.action)
+            finish()
+            return
+        }
+        compactPanel = savedInstanceState?.getBoolean("compactPanel") ?: launchesAsPanel
         installCrashReporter()
         enableEdgeToEdge()
         settings = Settings(this)
@@ -126,6 +139,23 @@ class MainActivity : ComponentActivity() {
 
         WakeListeningService.restoreCommand(this)
         setContent {
+            var input by rememberSaveable { mutableStateOf("") }
+            val wakeCommand by WakeListeningService.commands.collectAsState()
+            LaunchedEffect(wakeCommand) {
+                wakeCommand?.let { input = it }
+            }
+            val onInputChange: (String) -> Unit = {
+                input = it
+                if (it.isBlank() && wakeCommand != null) WakeListeningService.clearCommand(this)
+            }
+            val onSend: (String) -> Unit = {
+                if (it.isNotBlank() && !busy) {
+                    WakeListeningService.clearCommand(this)
+                    handle(it)
+                    input = ""
+                }
+            }
+            val onMic = { if (listening) speech.stop() else startListening() }
             val colors = if (isSystemInDarkTheme()) {
                 darkColorScheme(
                     primary = Color(0xFFAAC8FF),
@@ -148,7 +178,18 @@ class MainActivity : ComponentActivity() {
                 )
             }
             MaterialTheme(colorScheme = colors) {
-                if (showSettings) {
+                if (compactPanel) {
+                    AssistPanel(
+                        activity = this,
+                        input = input,
+                        onInputChange = onInputChange,
+                        onMic = onMic,
+                        onSend = onSend,
+                        onUndo = { undo(it) },
+                        onExpand = { compactPanel = false },
+                        onClose = { finish() },
+                    )
+                } else if (showSettings) {
                     SettingsScreen(
                         settings = settings,
                         loadCalendars = { actions.listCalendars() },
@@ -163,8 +204,10 @@ class MainActivity : ComponentActivity() {
                 } else {
                     MainScreen(
                         activity = this,
-                        onMic = { if (listening) speech.stop() else startListening() },
-                        onSend = { handle(it) },
+                        input = input,
+                        onInputChange = onInputChange,
+                        onMic = onMic,
+                        onSend = onSend,
                         onUndo = { entry -> undo(entry) },
                         onSettings = { speech.stop(); showSettings = true },
                     )
@@ -183,28 +226,50 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        if (isVoiceInvocation(intent.action)) {
+            if (!launchesAsPanel) {
+                openAssistPanel(intent.action)
+                return
+            }
+            compactPanel = true
+        }
         handleLaunchIntent(intent, firstLaunch = false)
     }
 
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putBoolean("compactPanel", compactPanel)
+    }
+
+    private fun openAssistPanel(action: String?) {
+        startActivity(Intent(this, AssistPanelActivity::class.java).setAction(action)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    }
+
+    private fun isVoiceInvocation(action: String?) =
+        action == Intent.ACTION_ASSIST || action == Intent.ACTION_VOICE_COMMAND || action == ACTION_LISTEN
+
     override fun onPostResume() {
         super.onPostResume()
-        watchAlarms.registerOnSharedPreferenceChangeListener(watchAlarmListener)
-        handleWatchAlarm()
+        if (::actions.isInitialized) {
+            watchAlarms.registerOnSharedPreferenceChangeListener(watchAlarmListener)
+            handleWatchAlarm()
+        }
     }
 
     override fun onPause() {
-        watchAlarms.unregisterOnSharedPreferenceChangeListener(watchAlarmListener)
+        if (::actions.isInitialized) watchAlarms.unregisterOnSharedPreferenceChangeListener(watchAlarmListener)
         super.onPause()
     }
 
     override fun onStop() {
         super.onStop()
-        speech.stop()
+        if (::speech.isInitialized) speech.stop()
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        speaker.shutdown()
+        if (::speaker.isInitialized) speaker.shutdown()
     }
 
     private fun handleWatchAlarm() {
@@ -229,10 +294,10 @@ class MainActivity : ComponentActivity() {
             showSettings = false
             return
         }
-        if (WakeListeningService.enabled.value || WakeListeningService.commands.value != null) return
-        val voiceLaunch = action == Intent.ACTION_ASSIST || action == Intent.ACTION_VOICE_COMMAND ||
-            action == ACTION_LISTEN
-        if (voiceLaunch || (firstLaunch && settings.listenOnOpen)) {
+        if (WakeListeningService.commands.value != null) return
+        val voiceLaunch = isVoiceInvocation(action)
+        val autoListen = firstLaunch && settings.listenOnOpen && !WakeListeningService.enabled.value
+        if (voiceLaunch || autoListen) {
             showSettings = false
             startListening()
         }
@@ -271,7 +336,10 @@ class MainActivity : ComponentActivity() {
     fun startListening() {
         if (WakeListeningService.enabled.value) {
             stopService(Intent(this, WakeListeningService::class.java))
-            addInfo("Ожидание фразы выключено. Нажми микрофон ещё раз для диктовки.")
+            lifecycleScope.launch {
+                WakeListeningService.enabled.first { !it }
+                lifecycle.withResumed { startListening() }
+            }
             return
         }
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
@@ -435,4 +503,9 @@ class MainActivity : ComponentActivity() {
         private const val CRASH_PREFS = "crash"
         const val ACTION_LISTEN = "app.pomoshnik.LISTEN"
     }
+}
+
+/** The system assistant entry point shares the command session with its expanded UI. */
+class AssistPanelActivity : MainActivity() {
+    override val launchesAsPanel = true
 }

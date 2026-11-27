@@ -64,13 +64,11 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
@@ -92,26 +90,17 @@ private val examples = listOf(
 @Composable
 fun MainScreen(
     activity: MainActivity,
+    input: String,
+    onInputChange: (String) -> Unit,
     onMic: () -> Unit,
     onSend: (String) -> Unit,
     onUndo: (Entry) -> Unit,
     onSettings: () -> Unit,
 ) {
-    var input by rememberSaveable { mutableStateOf("") }
     val wakeStatus by WakeListeningService.status.collectAsState()
-    val wakeCommand by WakeListeningService.commands.collectAsState()
-    LaunchedEffect(wakeCommand) {
-        wakeCommand?.let { input = it }
-    }
     val colors = MaterialTheme.colorScheme
     val canSend = input.isNotBlank() && !activity.busy
-    val send = {
-        if (canSend) {
-            WakeListeningService.clearCommand(activity)
-            onSend(input)
-            input = ""
-        }
-    }
+    val send = { if (canSend) onSend(input) }
 
     Scaffold(
         containerColor = Color.Transparent,
@@ -143,7 +132,7 @@ fun MainScreen(
                                 examples.forEach { (label, example) ->
                                     FilterChip(
                                         selected = input == example,
-                                        onClick = { input = example },
+                                        onClick = { onInputChange(example) },
                                         label = { Text(label) },
                                         shape = CircleShape,
                                     )
@@ -209,10 +198,7 @@ fun MainScreen(
                             Spacer(Modifier.width(8.dp))
                             OutlinedTextField(
                                 value = input,
-                                onValueChange = {
-                                    input = it
-                                    if (it.isBlank() && wakeCommand != null) WakeListeningService.clearCommand(activity)
-                                },
+                                onValueChange = onInputChange,
                                 modifier = Modifier.weight(1f),
                                 placeholder = { Text("Напиши команду") },
                                 singleLine = true,
@@ -239,7 +225,7 @@ fun MainScreen(
 }
 
 @Composable
-private fun EntryCard(entry: Entry, onUndo: (Entry) -> Unit) {
+internal fun EntryCard(entry: Entry, onUndo: (Entry) -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(24.dp),

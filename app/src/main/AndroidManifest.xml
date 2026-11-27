@@ -53,6 +53,18 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <meta-data
+                android:name="android.app.shortcuts"
+                android:resource="@xml/shortcuts" />
+        </activity>
+        <activity
+            android:name=".AssistPanelActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTop"
+            android:taskAffinity="app.pomoshnik.assist"
+            android:theme="@style/Theme.Pomoshnik.AssistPanel"
+            android:windowSoftInputMode="adjustResize">
             <!-- Lets the app be picked as the phone's digital assistant (long-press power). -->
             <intent-filter>
                 <action android:name="android.intent.action.ASSIST" />
@@ -66,9 +78,6 @@
                 <action android:name="app.pomoshnik.LISTEN" />
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
-            <meta-data
-                android:name="android.app.shortcuts"
-                android:resource="@xml/shortcuts" />
         </activity>
     </application>
 </manifest>
