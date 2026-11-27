@@ -5,6 +5,7 @@ import android.app.Activity
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.speech.RecognizerIntent
 import androidx.activity.ComponentActivity
@@ -22,6 +23,7 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.withResumed
 import app.pomoshnik.core.AiFallback
 import app.pomoshnik.core.Command
 import app.pomoshnik.core.CommandParser
@@ -73,6 +75,11 @@ class MainActivity : ComponentActivity() {
         listenAfterMicGrant = false
     }
 
+    private val wakePermissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+        if (requiredWakePermissions().isEmpty()) startWakeWhenVisible()
+        else addInfo("Для голосового вызова нужны доступ к микрофону и уведомлениям.")
+    }
+
     private val calendarPermission =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
             val (said, event) = pendingEvent ?: return@registerForActivityResult
@@ -117,6 +124,7 @@ class MainActivity : ComponentActivity() {
             onListening = { listening = it },
         )
 
+        WakeListeningService.restoreCommand(this)
         setContent {
             val colors = if (isSystemInDarkTheme()) {
                 darkColorScheme(
@@ -150,6 +158,7 @@ class MainActivity : ComponentActivity() {
                             )
                         },
                         onBack = { showSettings = false },
+                        onToggleWake = { toggleWakeListening() },
                     )
                 } else {
                     MainScreen(
@@ -216,6 +225,11 @@ class MainActivity : ComponentActivity() {
 
     private fun handleLaunchIntent(intent: Intent?, firstLaunch: Boolean) {
         val action = intent?.action
+        if (action == WakeListeningService.OPEN) {
+            showSettings = false
+            return
+        }
+        if (WakeListeningService.enabled.value || WakeListeningService.commands.value != null) return
         val voiceLaunch = action == Intent.ACTION_ASSIST || action == Intent.ACTION_VOICE_COMMAND ||
             action == ACTION_LISTEN
         if (voiceLaunch || (firstLaunch && settings.listenOnOpen)) {
@@ -224,7 +238,42 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun requiredWakePermissions(): List<String> = buildList {
+        add(Manifest.permission.RECORD_AUDIO)
+        if (Build.VERSION.SDK_INT >= 33) add(Manifest.permission.POST_NOTIFICATIONS)
+    }.filter { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }
+
+    private fun toggleWakeListening() {
+        if (WakeListeningService.enabled.value) {
+            stopService(Intent(this, WakeListeningService::class.java))
+            return
+        }
+        val permissions = requiredWakePermissions()
+        if (permissions.isEmpty()) startWakeWhenVisible()
+        else wakePermissions.launch(permissions.toTypedArray())
+    }
+
+    private fun startWakeWhenVisible() {
+        lifecycleScope.launch {
+            lifecycle.withResumed {
+                speech.stop()
+                speaker.stop()
+                try {
+                    ContextCompat.startForegroundService(this@MainActivity, Intent(this@MainActivity, WakeListeningService::class.java))
+                    showSettings = false
+                } catch (_: RuntimeException) {
+                    addInfo("Не удалось включить голосовой вызов.")
+                }
+            }
+        }
+    }
+
     fun startListening() {
+        if (WakeListeningService.enabled.value) {
+            stopService(Intent(this, WakeListeningService::class.java))
+            addInfo("Ожидание фразы выключено. Нажми микрофон ещё раз для диктовки.")
+            return
+        }
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             listenAfterMicGrant = true
             micPermission.launch(Manifest.permission.RECORD_AUDIO)

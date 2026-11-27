@@ -64,6 +64,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -96,10 +98,16 @@ fun MainScreen(
     onSettings: () -> Unit,
 ) {
     var input by rememberSaveable { mutableStateOf("") }
+    val wakeStatus by WakeListeningService.status.collectAsState()
+    val wakeCommand by WakeListeningService.commands.collectAsState()
+    LaunchedEffect(wakeCommand) {
+        wakeCommand?.let { input = it }
+    }
     val colors = MaterialTheme.colorScheme
     val canSend = input.isNotBlank() && !activity.busy
     val send = {
         if (canSend) {
+            WakeListeningService.clearCommand(activity)
             onSend(input)
             input = ""
         }
@@ -158,7 +166,7 @@ fun MainScreen(
                     activity.busy -> "Выполняю…"
                     activity.listening && activity.partial.isNotEmpty() -> activity.partial
                     activity.listening -> "Слушаю…"
-                    else -> ""
+                    else -> wakeStatus.orEmpty()
                 }
                 Surface(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp),
@@ -201,7 +209,10 @@ fun MainScreen(
                             Spacer(Modifier.width(8.dp))
                             OutlinedTextField(
                                 value = input,
-                                onValueChange = { input = it },
+                                onValueChange = {
+                                    input = it
+                                    if (it.isBlank() && wakeCommand != null) WakeListeningService.clearCommand(activity)
+                                },
                                 modifier = Modifier.weight(1f),
                                 placeholder = { Text("Напиши команду") },
                                 singleLine = true,
@@ -275,9 +286,11 @@ fun SettingsScreen(
     loadCalendars: () -> List<CalendarInfo>,
     requestCalendarPermission: () -> Unit,
     onBack: () -> Unit,
+    onToggleWake: () -> Unit,
 ) {
     BackHandler(onBack = onBack)
     val context = LocalContext.current
+    val wakeEnabled by WakeListeningService.enabled.collectAsState()
     var apiKey by remember { mutableStateOf(settings.yandexApiKey) }
     var folderId by remember { mutableStateOf(settings.yandexFolderId) }
     var model by remember { mutableStateOf(settings.yandexModel) }
@@ -333,6 +346,16 @@ fun SettingsScreen(
                     }
                 }
             }) { Text("Открыть приложения по умолчанию") }
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Голосовой вызов «Слушай меня»", modifier = Modifier.weight(1f))
+                Switch(checked = wakeEnabled, onCheckedChange = { onToggleWake() })
+            }
+            Text(
+                "Первый запуск загрузит около 44 МБ. После этого фраза распознаётся на телефоне. " +
+                    "Режим выключается после одной команды или через уведомление.",
+                style = MaterialTheme.typography.bodyMedium,
+            )
 
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("Слушать сразу при открытии", modifier = Modifier.weight(1f))
