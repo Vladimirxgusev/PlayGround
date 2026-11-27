@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
@@ -43,6 +44,8 @@ import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -74,6 +77,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import app.pomoshnik.core.CommandState
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -147,7 +152,9 @@ fun MainScreen(
                         verticalArrangement = Arrangement.spacedBy(10.dp),
                         reverseLayout = true,
                     ) {
-                        items(activity.history, key = { it.id }) { entry -> EntryCard(entry, onUndo) }
+                        items(activity.history, key = { it.id }) { entry ->
+                            EntryCard(entry, onUndo, entry.said in activity.favorites, activity::toggleFavorite)
+                        }
                     }
                 }
 
@@ -155,7 +162,7 @@ fun MainScreen(
                     activity.busy -> "Выполняю…"
                     activity.listening && activity.partial.isNotEmpty() -> activity.partial
                     activity.listening -> "Слушаю…"
-                    else -> wakeStatus.orEmpty()
+                    else -> activity.clarification ?: wakeStatus.orEmpty()
                 }
                 Surface(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp),
@@ -164,6 +171,7 @@ fun MainScreen(
                     tonalElevation = 3.dp,
                 ) {
                     Column(Modifier.padding(10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                        FavoriteCommands(activity.favorites, onInputChange)
                         if (status.isNotEmpty()) {
                             Row(
                                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
@@ -173,7 +181,11 @@ fun MainScreen(
                                     CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
                                     Spacer(Modifier.width(8.dp))
                                 }
-                                Text(status, style = MaterialTheme.typography.bodyMedium, color = colors.primary)
+                                Text(status, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium,
+                                    color = colors.primary)
+                                if (activity.clarification != null) {
+                                    TextButton(onClick = activity::cancelClarification) { Text("Отмена") }
+                                }
                             }
                         }
                         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -225,7 +237,28 @@ fun MainScreen(
 }
 
 @Composable
-internal fun EntryCard(entry: Entry, onUndo: (Entry) -> Unit) {
+internal fun FavoriteCommands(commands: List<String>, onSelect: (String) -> Unit) {
+    if (commands.isEmpty()) return
+    Row(
+        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        for (command in commands) {
+            FilterChip(
+                selected = false,
+                onClick = { onSelect(command) },
+                label = { Text(command, Modifier.widthIn(max = 190.dp), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                leadingIcon = { Icon(Icons.Filled.Star, contentDescription = null, modifier = Modifier.size(14.dp)) },
+                shape = CircleShape,
+            )
+        }
+    }
+}
+
+@Composable
+internal fun EntryCard(
+    entry: Entry, onUndo: (Entry) -> Unit, favorite: Boolean, onFavorite: (String) -> Unit,
+) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(24.dp),
@@ -235,15 +268,24 @@ internal fun EntryCard(entry: Entry, onUndo: (Entry) -> Unit) {
     ) {
         Column(Modifier.padding(14.dp)) {
             if (entry.said.isNotEmpty()) {
-                Text("«${entry.said}»", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(Modifier.height(6.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(entry.state.title, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                        Text("«${entry.said}»", style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    IconButton(onClick = { onFavorite(entry.said) }) {
+                        Icon(if (favorite) Icons.Filled.Star else Icons.Filled.StarBorder,
+                            contentDescription = if (favorite) "Убрать из избранного" else "В избранное")
+                    }
+                }
             }
             Row(verticalAlignment = Alignment.Top) {
                 Icon(
-                    if (entry.ok) Icons.Filled.CheckCircle else Icons.Filled.ErrorOutline,
+                    if (entry.state == CommandState.FAILED) Icons.Filled.ErrorOutline else Icons.Filled.CheckCircle,
                     contentDescription = null,
                     modifier = Modifier.size(20.dp),
-                    tint = if (entry.ok) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                    tint = if (entry.state == CommandState.FAILED) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
                 )
                 Spacer(Modifier.width(8.dp))
                 SelectionContainer(Modifier.weight(1f)) {

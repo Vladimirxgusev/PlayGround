@@ -75,6 +75,22 @@ object CommandParser {
         }
     }
 
+    fun completeAlarm(input: String, reply: String, now: LocalDateTime = LocalDateTime.now()): Command.SetAlarm? {
+        val normalized = RuText.normalize(reply).removePrefix("в ").removePrefix("на ")
+        val number = RuNumbers.PATTERN
+        val time = if (Regex(number).matches(normalized)) {
+            "на $normalized"
+        } else {
+            val pair = Regex("($number)\\s+($number)").matchEntire(normalized)
+            val hour = pair?.groupValues?.get(1)?.let(RuNumbers::parse)
+            val minute = pair?.groupValues?.get(2)?.let(RuNumbers::parse)
+            if (hour != null && hour in 0..23 && minute != null && minute in 0..59) {
+                "$hour:${minute.toString().padStart(2, '0')}"
+            } else if (parse(reply, now) is Command.Unknown) reply else return null
+        }
+        return parse("$input $time", now) as? Command.SetAlarm
+    }
+
     private fun parseTimer(text: String, input: String): Command {
         val durRx = rx("$L(?:на\\s+)?(${Durations.pattern(clockOnly = true)})")
         val m = durRx.find(text)
@@ -98,7 +114,7 @@ object CommandParser {
     private fun parseAlarm(text: String, input: String, now: LocalDateTime): Command {
         val ex = DateTimeExtractor(now).extract(text, preferPm = false, wantDuration = false)
         val time = ex.relative?.toLocalTime() ?: ex.time
-            ?: return Command.Unknown(input, "Не услышал время будильника")
+            ?: return Command.Unknown(input, "Не услышал время будильника", needsAlarmTime = true)
         val label = RuText.capitalize(cleanTitle(alarmFillerRx.replace(ex.rest, " "))).ifEmpty { null }
         return Command.SetAlarm(time.hour, time.minute, label, ex.days)
     }

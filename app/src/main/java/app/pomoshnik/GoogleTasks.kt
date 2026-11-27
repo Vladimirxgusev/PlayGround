@@ -74,12 +74,15 @@ class GoogleTasks(private val context: Context) {
         val reply = call("POST", "$BASE/lists/@default/tasks", body.toString())
         val id = JSONObject(reply).getString("id")
         val timeNote = if (c.time != null) "\nGoogle Задачи хранят только дату, время записано в заметку." else ""
-        return Outcome(true, Describe.command(c) + "\nДобавлено в Google Задачи." + timeNote) {
-            // Undo runs on the main thread from a button; the network call goes to a worker thread.
-            Thread { runCatching { kotlinx.coroutines.runBlocking { call("DELETE", "$BASE/lists/@default/tasks/$id", null) } } }
-                .start()
-            "Задача «${c.title}» удалена из Google Задач"
-        }
+        return Outcome(
+            true, Describe.command(c) + "\nДобавлено в Google Задачи." + timeNote,
+            UndoAction(UndoAction.Kind.TASK, id),
+        )
+    }
+
+    suspend fun delete(id: String) {
+        val encoded = android.net.Uri.encode(id)
+        call("DELETE", "$BASE/lists/@default/tasks/$encoded", null)
     }
 
     private suspend fun call(method: String, url: String, body: String?, retried: Boolean = false): String {

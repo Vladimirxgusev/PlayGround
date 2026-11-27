@@ -27,6 +27,7 @@ import androidx.core.widget.doAfterTextChanged
 import androidx.lifecycle.lifecycleScope
 import app.pomoshnik.core.Command
 import app.pomoshnik.core.CommandParser
+import app.pomoshnik.core.CommandState
 import app.pomoshnik.core.Describe
 import app.pomoshnik.core.WatchTaskSync
 import com.google.android.gms.wearable.DataClient
@@ -43,6 +44,7 @@ import java.util.UUID
 
 class WatchActivity : ComponentActivity(), DataClient.OnDataChangedListener {
     private val store by lazy { getSharedPreferences("watch-task", MODE_PRIVATE) }
+    private val history by lazy { WatchCommandHistory(this) }
     private val data by lazy { Wearable.getDataClient(this) }
     private lateinit var input: EditText
     private lateinit var status: TextView
@@ -50,6 +52,14 @@ class WatchActivity : ComponentActivity(), DataClient.OnDataChangedListener {
     private lateinit var title: TextView
     private lateinit var type: Button
     private lateinit var cancel: Button
+    private lateinit var quickButton: Button
+    private lateinit var historyButton: Button
+    private lateinit var quickCommands: LinearLayout
+    private lateinit var historyPage: LinearLayout
+    private lateinit var scroll: ScrollView
+    private enum class Page { ASSISTANT, QUICK, HISTORY }
+    private var page = Page.ASSISTANT
+    private var dictatingTask = false
     private var editing = false
     private lateinit var send: Button
     private var sending = false
@@ -60,15 +70,21 @@ class WatchActivity : ComponentActivity(), DataClient.OnDataChangedListener {
             val text = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()
             if (!text.isNullOrBlank()) {
                 editing = true
-                input.setText(text)
+                page = Page.ASSISTANT
+                val commandText = if (dictatingTask && CommandParser.parse(text) !is Command.CreateTask) {
+                    "Добавь задачу $text"
+                } else text
+                input.setText(commandText)
                 input.setSelection(input.length())
             }
         }
+        dictatingTask = false
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         editing = savedInstanceState?.getBoolean("editing") == true || store.contains("text")
+        dictatingTask = savedInstanceState?.getBoolean("dictatingTask") == true
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
@@ -101,6 +117,10 @@ class WatchActivity : ComponentActivity(), DataClient.OnDataChangedListener {
             input.windowInsetsController?.show(WindowInsets.Type.ime())
         }
         content.addView(type, controlLayout())
+        quickButton = commandButton("Быстрые команды") { showPage(Page.QUICK) }
+        content.addView(quickButton, controlLayout())
+        historyButton = commandButton("История") { showPage(Page.HISTORY) }
+        content.addView(historyButton, controlLayout())
         input = EditText(this).apply {
             id = R.id.watch_command
             hint = "Команда"
@@ -125,7 +145,9 @@ class WatchActivity : ComponentActivity(), DataClient.OnDataChangedListener {
             accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
             text = store.getString("status", "")
             visibility = if (text.isEmpty()) View.GONE else View.VISIBLE
-            doAfterTextChanged { visibility = if (it.isNullOrEmpty()) View.GONE else View.VISIBLE }
+            doAfterTextChanged {
+                visibility = if (page == Page.ASSISTANT && !it.isNullOrEmpty()) View.VISIBLE else View.GONE
+            }
         }
         content.addView(status, controlLayout())
         cancel = commandButton("Назад") {
@@ -137,7 +159,21 @@ class WatchActivity : ComponentActivity(), DataClient.OnDataChangedListener {
             updateControls()
         }
         content.addView(cancel, controlLayout())
-        val scroll = ScrollView(this).apply {
+        quickCommands = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(commandButton("Таймер 5 мин") {
+                page = Page.ASSISTANT
+                editing = true
+                input.setText("Таймер на 5 минут")
+                showPage(Page.ASSISTANT)
+            }, controlLayout())
+            addView(commandButton("Записать задачу") { dictate(task = true) }, controlLayout())
+            addView(commandButton("Назад") { showPage(Page.ASSISTANT) }, controlLayout())
+        }
+        content.addView(quickCommands, controlLayout())
+        historyPage = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        content.addView(historyPage, controlLayout())
+        scroll = ScrollView(this).apply {
             isFillViewport = true
             background = GradientDrawable(
                 GradientDrawable.Orientation.TOP_BOTTOM,
@@ -166,6 +202,7 @@ class WatchActivity : ComponentActivity(), DataClient.OnDataChangedListener {
 
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putBoolean("editing", editing)
+        outState.putBoolean("dictatingTask", dictatingTask)
         super.onSaveInstanceState(outState)
     }
 
@@ -224,13 +261,16 @@ class WatchActivity : ComponentActivity(), DataClient.OnDataChangedListener {
         }
     }
 
-    private fun dictate() {
+    private fun dictate(task: Boolean = false) {
+        dictatingTask = task
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
             .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             .putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ru-RU")
         try {
             voice.launch(intent)
         } catch (_: ActivityNotFoundException) {
+            dictatingTask = false
+            showPage(Page.ASSISTANT)
             status.text = "Распознавание недоступно. Введи команду текстом."
         }
     }
@@ -246,6 +286,7 @@ class WatchActivity : ComponentActivity(), DataClient.OnDataChangedListener {
         when (val parsed = command) {
             is Command.CreateTask, is Command.SetAlarm -> sendToPhone()
             is Command.SetTimer -> openClock(
+                input.text.toString(),
                 Intent(AlarmClock.ACTION_SET_TIMER)
                     .putExtra(AlarmClock.EXTRA_LENGTH, parsed.seconds)
                     .putExtra(AlarmClock.EXTRA_MESSAGE, parsed.label),
@@ -254,18 +295,23 @@ class WatchActivity : ComponentActivity(), DataClient.OnDataChangedListener {
         }
     }
 
-    private fun openClock(intent: Intent) {
+    private fun openClock(text: String, intent: Intent) {
         try {
             startActivity(intent.putExtra(AlarmClock.EXTRA_SKIP_UI, true))
             editing = false
             input.text.clear()
             store.edit().remove("text").remove("status").apply()
-            status.text = "Команда передана в «Часы»."
+            recordTimer(text, "Таймер передан в «Часы».", CommandState.SENT)
         } catch (_: ActivityNotFoundException) {
-            status.text = "Приложение «Часы» не принимает эту команду на этой модели."
+            recordTimer(text, "Приложение «Часы» не принимает эту команду на этой модели.", CommandState.FAILED)
         } catch (_: SecurityException) {
-            status.text = "Часы не разрешили выполнить команду."
+            recordTimer(text, "Часы не разрешили выполнить команду.", CommandState.FAILED)
         }
+    }
+
+    private fun recordTimer(text: String, message: String, state: CommandState) {
+        history.put(WatchCommandHistory.Record(UUID.randomUUID().toString(), text, message, state))
+        status.text = message
     }
 
     private fun sendToPhone() {
@@ -275,10 +321,11 @@ class WatchActivity : ComponentActivity(), DataClient.OnDataChangedListener {
         val enteredAt = store.getString("enteredAt", null) ?: LocalDateTime.now().toString()
         val waiting = "В очереди. Ждём подтверждения телефона."
         if (!store.edit().putString("id", id).putString("text", text)
-                .putString("enteredAt", enteredAt).putString("status", waiting).commit()) {
+                .putString("enteredAt", enteredAt).putString("status", waiting).putString("statusId", id).commit()) {
             status.text = "Не удалось сохранить команду для отправки."
             return
         }
+        history.put(WatchCommandHistory.Record(id, text, waiting, CommandState.QUEUED))
         sending = true
         status.text = "Отправляем команду…"
         input.clearFocus()
@@ -288,6 +335,7 @@ class WatchActivity : ComponentActivity(), DataClient.OnDataChangedListener {
             try {
                 val request = PutDataMapRequest.create(WatchTaskSync.REQUEST + id).apply {
                     dataMap.putString(WatchTaskSync.TEXT, text)
+                    dataMap.putBoolean(WatchTaskSync.TRACK_FINAL, true)
                     dataMap.putString(WatchTaskSync.ENTERED_AT, enteredAt)
                     dataMap.putString("deliveryAttempt", UUID.randomUUID().toString())
                 }.asPutDataRequest().setUrgent()
@@ -301,7 +349,11 @@ class WatchActivity : ComponentActivity(), DataClient.OnDataChangedListener {
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {
-                if (pendingId() == id) status.text = "Не удалось отправить. Попробуйте ещё раз."
+                if (pendingId() == id) {
+                    val message = "Не удалось отправить. Попробуйте ещё раз."
+                    history.put(WatchCommandHistory.Record(id, text, message, CommandState.FAILED))
+                    status.text = message
+                }
             } finally {
                 sending = false
                 updateControls()
@@ -310,23 +362,68 @@ class WatchActivity : ComponentActivity(), DataClient.OnDataChangedListener {
     }
 
     private fun receiveResult(item: DataItem) {
-        val id = pendingId() ?: return
-        if (item.uri.path != WatchTaskSync.RESULT + id) return
+        val path = item.uri.path ?: return
+        val final = path.startsWith(WatchTaskSync.FINAL)
+        if (!final && !path.startsWith(WatchTaskSync.RESULT)) return
+        val id = path.removePrefix(if (final) WatchTaskSync.FINAL else WatchTaskSync.RESULT)
+        val pending = pendingId() == id
+        val prior = history.records().firstOrNull { it.id == id }
+        if (!pending && (!final || prior?.state != CommandState.QUEUED)) {
+            if (prior != null) data.deleteDataItems(item.uri)
+            return
+        }
         val result = runCatching { DataMapItem.fromDataItem(item).dataMap }.getOrNull() ?: return
         val message = result.getString(WatchTaskSync.MESSAGE) ?: return
         val success = result.getBoolean(WatchTaskSync.OK)
-        val requestUri = store.getString("requestUri", null)?.let(Uri::parse)
-        val update = store.edit().remove("id").remove("enteredAt").remove("requestUri").putString("status", message)
-        if (success) update.remove("text")
-        if (!update.commit()) return
-        if (success) {
-            editing = false
-            input.text.clear()
+        val state = result.getString(WatchTaskSync.STATE)?.let { value ->
+            CommandState.entries.firstOrNull { it.name == value }
+        } ?: if (success) CommandState.DONE else CommandState.FAILED
+        val text = prior?.text ?: store.getString("text", null).orEmpty()
+        if (!history.put(WatchCommandHistory.Record(id, text, message, state))) return
+        if (page == Page.HISTORY) renderHistory()
+
+        if (pending) {
+            val requestUri = store.getString("requestUri", null)?.let(Uri::parse)
+            val update = store.edit().remove("id").remove("enteredAt").remove("requestUri").putString("status", message)
+            if (success) update.remove("text")
+            if (!update.commit()) return
+            if (success) {
+                editing = false
+                input.text.clear()
+            }
+            refreshCommand()
+            requestUri?.let { data.deleteDataItems(it) }
         }
-        refreshCommand()
-        status.text = message
-        requestUri?.let { data.deleteDataItems(it) }
+        if (pending || store.getString("statusId", null) == id) {
+            store.edit().putString("status", message).apply()
+            status.text = message
+        }
         data.deleteDataItems(item.uri)
+    }
+
+    private fun showPage(target: Page) {
+        page = target
+        if (target == Page.HISTORY) renderHistory()
+        updateControls()
+        scroll.post { scroll.scrollTo(0, 0) }
+    }
+
+    private fun renderHistory() {
+        historyPage.removeAllViews()
+        historyPage.addView(commandButton("Назад") { showPage(Page.ASSISTANT) }, controlLayout())
+        val records = history.records()
+        if (records.isEmpty()) historyPage.addView(historyLine("Пока нет команд"), controlLayout())
+        for (record in records) {
+            historyPage.addView(historyLine("${record.state.title} · ${record.text}\n${record.message}"), controlLayout())
+        }
+    }
+
+    private fun historyLine(value: String) = TextView(this).apply {
+        text = value
+        textSize = 13f
+        setTextColor(INK)
+        gravity = Gravity.CENTER
+        setPadding(dp(5), dp(5), dp(5), dp(5))
     }
 
     private fun pendingId(): String? = store.getString("id", null)
@@ -338,12 +435,19 @@ class WatchActivity : ComponentActivity(), DataClient.OnDataChangedListener {
 
     private fun updateControls() {
         val pending = pendingId() != null
+        val home = page == Page.ASSISTANT
         val reviewing = editing || pending
-        title.visibility = if (reviewing) View.GONE else View.VISIBLE
-        mic.visibility = if (reviewing) View.GONE else View.VISIBLE
-        type.visibility = if (reviewing) View.GONE else View.VISIBLE
-        input.visibility = if (reviewing) View.VISIBLE else View.GONE
-        cancel.visibility = if (editing && !pending && !sending) View.VISIBLE else View.GONE
+        val idle = home && !reviewing
+        title.visibility = if (idle) View.VISIBLE else View.GONE
+        mic.visibility = if (idle) View.VISIBLE else View.GONE
+        type.visibility = if (idle) View.VISIBLE else View.GONE
+        quickButton.visibility = if (idle) View.VISIBLE else View.GONE
+        historyButton.visibility = if (idle) View.VISIBLE else View.GONE
+        quickCommands.visibility = if (page == Page.QUICK) View.VISIBLE else View.GONE
+        historyPage.visibility = if (page == Page.HISTORY) View.VISIBLE else View.GONE
+        input.visibility = if (home && reviewing) View.VISIBLE else View.GONE
+        status.visibility = if (home && status.text.isNotEmpty()) View.VISIBLE else View.GONE
+        cancel.visibility = if (home && editing && !pending && !sending) View.VISIBLE else View.GONE
         input.isEnabled = !pending && !sending
         val label = when {
             pending -> "Повторить отправку"
@@ -352,7 +456,7 @@ class WatchActivity : ComponentActivity(), DataClient.OnDataChangedListener {
             command is Command.SetTimer -> "Запустить таймер"
             else -> null
         }
-        send.visibility = if (label != null) android.view.View.VISIBLE else android.view.View.GONE
+        send.visibility = if (home && label != null) android.view.View.VISIBLE else android.view.View.GONE
         send.isEnabled = !sending
         send.text = label.orEmpty()
         send.alpha = if (sending) 0.6f else 1f

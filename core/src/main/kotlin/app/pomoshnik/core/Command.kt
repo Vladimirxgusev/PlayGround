@@ -51,5 +51,9 @@ sealed interface Command {
     data class Answer(val text: String) : Command
 
     /** Not understood. [reason] is shown to the user when no AI fallback is available. */
-    data class Unknown(val text: String, val reason: String = "Не понял команду") : Command
+    data class Unknown(
+        val text: String,
+        val reason: String = "Не понял команду",
+        val needsAlarmTime: Boolean = false,
+    ) : Command
 }

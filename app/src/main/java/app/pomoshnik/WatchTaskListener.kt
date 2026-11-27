@@ -11,6 +11,7 @@ import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import app.pomoshnik.core.Command
 import app.pomoshnik.core.CommandParser
+import app.pomoshnik.core.CommandState
 import app.pomoshnik.core.WatchTaskSync
 import com.google.android.gms.wearable.DataEvent
 import com.google.android.gms.wearable.DataEventBuffer
@@ -45,7 +46,8 @@ class WatchTaskListener : WearableListenerService() {
                         setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
                     }
                 }
-                .setInputData(workDataOf("id" to id, WatchTaskSync.TEXT to text, WatchTaskSync.ENTERED_AT to enteredAt))
+                .setInputData(workDataOf("id" to id, WatchTaskSync.TEXT to text, WatchTaskSync.ENTERED_AT to enteredAt,
+                    WatchTaskSync.TRACK_FINAL to payload.getBoolean(WatchTaskSync.TRACK_FINAL)))
                 .build()
             WorkManager.getInstance(this).enqueueUniqueWork("watch-task-$id", ExistingWorkPolicy.KEEP, work)
         }
@@ -63,18 +65,26 @@ class WatchTaskWorker(context: Context, parameters: WorkerParameters) : Coroutin
         val outcome = when (saved) {
             null -> {
                 if (!journal.edit().putString(id, IN_PROGRESS).commit()) return Result.retry()
-                executeCommand(id, text, LocalDateTime.parse(enteredAt))
+                executeCommand(id, text, LocalDateTime.parse(enteredAt)).also {
+                    CommandHistory(applicationContext).put(Entry(id, text, it.message, it.state, undo = it.undo),
+                        unlessFinished = it.state == CommandState.QUEUED)
+                }
             }
             IN_PROGRESS -> Outcome(false, "Проверьте результат на телефоне перед повторной отправкой.")
-            else -> JSONObject(saved).let { Outcome(it.getBoolean("ok"), it.getString("message")) }
+            else -> JSONObject(saved).let {
+                val fallback = if (it.getBoolean("ok")) CommandState.DONE else CommandState.FAILED
+                Outcome(it.getBoolean("ok"), it.getString("message"),
+                    state = CommandState.valueOf(it.optString("state", fallback.name)))
+            }
         }
 
         if (saved == null || saved == IN_PROGRESS) {
-            val record = JSONObject().put("ok", outcome.ok).put("message", outcome.message)
+            val record = JSONObject().put("ok", outcome.ok).put("message", outcome.message).put("state", outcome.state.name)
             if (!journal.edit().putString(id, record.toString()).commit()) return Result.retry()
         }
         val result = PutDataMapRequest.create(WatchTaskSync.RESULT + id).apply {
             dataMap.putBoolean(WatchTaskSync.OK, outcome.ok)
+            dataMap.putString(WatchTaskSync.STATE, outcome.state.name)
             dataMap.putString(WatchTaskSync.MESSAGE, outcome.message)
         }.asPutDataRequest().setUrgent()
         return try {
@@ -92,10 +102,11 @@ class WatchTaskWorker(context: Context, parameters: WorkerParameters) : Coroutin
             is Command.CreateTask -> createTask(command)
             is Command.SetAlarm -> {
                 val queued = WatchAlarms.queue(applicationContext).edit()
-                    .putString(id, JSONObject().put("text", text).put("enteredAt", enteredAt.toString()).toString())
+                    .putString(id, JSONObject().put("text", text).put("enteredAt", enteredAt.toString())
+                        .put("trackFinal", inputData.getBoolean(WatchTaskSync.TRACK_FINAL, false)).toString())
                     .commit()
                 if (queued) {
-                    Outcome(true, "Будильник передан. Если «Секретутка» закрыта, открой её на телефоне.")
+                    Outcome(true, "Телефон получил будильник. Открой «Секретутку» на телефоне.", state = CommandState.QUEUED)
                 } else {
                     Outcome(false, "Телефон не смог сохранить команду будильника.")
                 }
@@ -107,7 +118,7 @@ class WatchTaskWorker(context: Context, parameters: WorkerParameters) : Coroutin
     private suspend fun createTask(command: Command.CreateTask): Outcome {
         return try {
             val outcome = GoogleTasks(applicationContext).create(command)
-            Outcome(outcome.ok, "Добавлено в Google Задачи: ${command.title}")
+            outcome.copy(message = "Добавлено в Google Задачи: ${command.title}")
         } catch (e: CancellationException) {
             throw e
         } catch (e: GoogleTasksConsentRequired) {

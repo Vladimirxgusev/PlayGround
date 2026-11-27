@@ -34,6 +34,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -62,7 +63,7 @@ internal fun AssistPanel(
     val status = when {
         activity.busy -> "Выполняю…"
         activity.listening -> activity.partial.ifBlank { "Слушаю…" }
-        else -> wakeStatus.orEmpty()
+        else -> activity.clarification ?: wakeStatus.orEmpty()
     }
     val canSend = input.isNotBlank() && !activity.busy
     val send = { if (canSend) onSend(input) }
@@ -98,9 +99,10 @@ internal fun AssistPanel(
                         }
                     }
 
+                    FavoriteCommands(activity.favorites, onInputChange)
                     activity.history.firstOrNull()?.let { entry ->
                         Column(Modifier.heightIn(max = 132.dp).verticalScroll(rememberScrollState())) {
-                            EntryCard(entry, onUndo)
+                            EntryCard(entry, onUndo, entry.said in activity.favorites, activity::toggleFavorite)
                         }
                     }
 
@@ -115,11 +117,15 @@ internal fun AssistPanel(
                             }
                             Text(
                                 status,
+                                modifier = Modifier.weight(1f),
                                 color = colors.primary,
                                 maxLines = 2,
                                 overflow = TextOverflow.Ellipsis,
                                 style = MaterialTheme.typography.bodyMedium,
                             )
+                            if (activity.clarification != null) {
+                                TextButton(onClick = activity::cancelClarification) { Text("Отмена") }
+                            }
                         }
                     }
 

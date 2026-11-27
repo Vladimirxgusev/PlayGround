@@ -14,13 +14,19 @@ import android.provider.CalendarContract.Calendars
 import android.provider.CalendarContract.Events
 import android.provider.CalendarContract.Reminders
 import app.pomoshnik.core.Command
+import app.pomoshnik.core.CommandState
 import app.pomoshnik.core.Describe
 import java.time.DayOfWeek
 import java.time.ZoneId
 import java.time.ZoneOffset
 
 /** Outcome of running a command, shown in the history list. */
-data class Outcome(val ok: Boolean, val message: String, val undo: (() -> String)? = null)
+data class Outcome(
+    val ok: Boolean,
+    val message: String,
+    val undo: UndoAction? = null,
+    val state: CommandState = if (ok) CommandState.DONE else CommandState.FAILED,
+)
 
 data class CalendarInfo(val id: Long, val name: String, val account: String, val isGoogle: Boolean, val isPrimary: Boolean)
 
@@ -36,7 +42,8 @@ class Actions(private val activity: Activity, private val settings: Settings) {
         if (c.days.isNotEmpty()) {
             intent.putExtra(AlarmClock.EXTRA_DAYS, ArrayList(c.days.sorted().map { it.toCalendarDay() }))
         }
-        return launch(intent, Describe.command(c), "Не нашёл приложение «Часы» для будильника")
+        val result = launch(intent, "Передано в «Часы» · " + Describe.command(c), "Не нашёл приложение «Часы» для будильника")
+        return if (result.ok) result.copy(state = CommandState.SENT) else result
     }
 
     fun setTimer(c: Command.SetTimer): Outcome {
@@ -44,7 +51,8 @@ class Actions(private val activity: Activity, private val settings: Settings) {
             .putExtra(AlarmClock.EXTRA_LENGTH, c.seconds)
             .putExtra(AlarmClock.EXTRA_SKIP_UI, true)
         c.label?.let { intent.putExtra(AlarmClock.EXTRA_MESSAGE, it) }
-        return launch(intent, Describe.command(c), "Не нашёл приложение «Часы» для таймера")
+        val result = launch(intent, "Передано в «Часы» · " + Describe.command(c), "Не нашёл приложение «Часы» для таймера")
+        return if (result.ok) result.copy(state = CommandState.SENT) else result
     }
 
     /** Needs READ/WRITE_CALENDAR; the caller requests them first. */
@@ -80,10 +88,15 @@ class Actions(private val activity: Activity, private val settings: Settings) {
                 },
             )
         }
-        return Outcome(true, Describe.command(c) + "\nКалендарь: ${calendar.name}") {
-            resolver.delete(uri, null, null)
-            "Событие «${c.title}» удалено"
-        }
+        return Outcome(
+            true, Describe.command(c) + "\nКалендарь: ${calendar.name}",
+            UndoAction(UndoAction.Kind.EVENT, ContentUris.parseId(uri).toString()),
+        )
+    }
+
+    fun deleteEvent(id: String) {
+        val uri = ContentUris.withAppendedId(Events.CONTENT_URI, id.toLong())
+        check(activity.contentResolver.delete(uri, null, null) > 0) { "Событие не найдено в календаре" }
     }
 
     /** Without calendar permission: open the calendar's own "new event" screen, pre-filled. */
@@ -102,7 +115,8 @@ class Actions(private val activity: Activity, private val settings: Settings) {
                     start.plusMinutes(c.durationMinutes.toLong()).toInstant().toEpochMilli(),
                 )
         }
-        return launch(intent, "Открыл календарь, проверьте и сохраните событие", "Не нашёл приложение календаря")
+        val result = launch(intent, "Открыл календарь, проверьте и сохраните событие", "Не нашёл приложение календаря")
+        return if (result.ok) result.copy(state = CommandState.SENT) else result
     }
 
     /** Fallback when Google Tasks cannot be reached: copy the text and open the Tasks app. */

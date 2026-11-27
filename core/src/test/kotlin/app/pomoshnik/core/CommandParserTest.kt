@@ -43,7 +43,15 @@ class CommandParserTest {
     @Test fun alarmHoursWord() =
         assertEquals(Command.SetAlarm(7, 15), parse("будильник на 7 часов 15 минут"))
 
-    @Test fun alarmWithoutTime() { assertIs<Command.Unknown>(parse("поставь будильник")) }
+    @Test fun alarmWithoutTime() {
+        val prompt = assertIs<Command.Unknown>(parse("поставь будильник"))
+        assertEquals(true, prompt.needsAlarmTime)
+        assertIs<Command.Unknown>(parse("на 10:30"))
+        assertEquals(Command.SetAlarm(10, 30), CommandParser.completeAlarm(prompt.text, "на 10:30"))
+        assertEquals(Command.SetAlarm(10, 30), CommandParser.completeAlarm(prompt.text, "на десять тридцать"))
+        assertEquals(Command.SetAlarm(21, 0), CommandParser.completeAlarm(prompt.text, "двадцать один"))
+        assertEquals(null, CommandParser.completeAlarm(prompt.text, "таймер на пять минут"))
+    }
 
     // --- Timers ---
 

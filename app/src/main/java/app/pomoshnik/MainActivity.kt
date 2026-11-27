@@ -30,20 +30,12 @@ import androidx.lifecycle.withResumed
 import app.pomoshnik.core.AiFallback
 import app.pomoshnik.core.Command
 import app.pomoshnik.core.CommandParser
+import app.pomoshnik.core.CommandState
+import java.util.UUID
 import app.pomoshnik.core.InfoFormat
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.first
 import java.time.LocalDateTime
-
-/** One line in the history: what was said and what happened. */
-data class Entry(
-    val id: Long,
-    val said: String,
-    val result: String,
-    val ok: Boolean,
-    val viaAi: Boolean = false,
-    val undo: (() -> String)? = null,
-)
 
 open class MainActivity : ComponentActivity() {
 
@@ -71,7 +63,12 @@ open class MainActivity : ComponentActivity() {
     var busy by mutableStateOf(false)
     var showSettings by mutableStateOf(false)
 
-    private var nextId = 0L
+    private val commandHistory by lazy { CommandHistory(this) }
+    val favorites = mutableStateListOf<String>()
+    var clarification by mutableStateOf<String?>(null)
+        private set
+    private var alarmPhrase: String? = null
+    private val historyListener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ -> refreshHistory() }
     private var pendingEvent: Pair<String, Command.CreateEvent>? = null
     private var pendingViaAi = false
     private var listenAfterMicGrant = false
@@ -111,7 +108,7 @@ open class MainActivity : ComponentActivity() {
     private val speechDialog = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { res ->
         listening = false
         val text = res.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()
-        if (res.resultCode == Activity.RESULT_OK && !text.isNullOrBlank()) handle(text)
+        if (res.resultCode == Activity.RESULT_OK && !text.isNullOrBlank()) handle(text, fromVoice = true)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -125,6 +122,8 @@ open class MainActivity : ComponentActivity() {
         installCrashReporter()
         enableEdgeToEdge()
         settings = Settings(this)
+        commandHistory.preferences.registerOnSharedPreferenceChangeListener(historyListener)
+        refreshHistory()
         actions = Actions(this, settings)
         googleTasks = GoogleTasks(this).also { it.attach(googleConsent) }
         info = InfoService(this, settings)
@@ -132,7 +131,7 @@ open class MainActivity : ComponentActivity() {
         speech = SpeechInput(
             context = this,
             onPartial = { partial = it },
-            onResult = { partial = ""; handle(it) },
+            onResult = { partial = ""; handle(it, fromVoice = true) },
             onError = { partial = ""; addInfo(it) },
             onListening = { listening = it },
         )
@@ -269,7 +268,10 @@ open class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        if (::speaker.isInitialized) speaker.shutdown()
+        if (::speaker.isInitialized) {
+            commandHistory.preferences.unregisterOnSharedPreferenceChangeListener(historyListener)
+            speaker.shutdown()
+        }
     }
 
     private fun handleWatchAlarm() {
@@ -277,15 +279,12 @@ open class MainActivity : ComponentActivity() {
         // Dispatch only while this activity is visible. Prevent duplicate dispatch if Clock takes focus.
         watchAlarms.unregisterOnSharedPreferenceChangeListener(watchAlarmListener)
         val outcome = try {
-            if (watchAlarms.edit().remove(alarm.id).commit()) {
-                actions.setAlarm(alarm.command)
-            } else {
-                Outcome(false, "Не удалось обработать будильник с часов. Откройте приложение ещё раз.")
-            }
+            if (!watchAlarms.edit().remove(alarm.id).commit()) return
+            actions.setAlarm(alarm.command)
         } finally {
             watchAlarms.registerOnSharedPreferenceChangeListener(watchAlarmListener)
         }
-        addEntry(alarm.text, outcome, viaAi = false)
+        WatchAlarms.complete(this, alarm, outcome)
     }
 
     private fun handleLaunchIntent(intent: Intent?, firstLaunch: Boolean) {
@@ -363,11 +362,29 @@ open class MainActivity : ComponentActivity() {
     }
 
     /** Rules first; if they fail and YandexGPT is set up, ask it. Then run the command. */
-    fun handle(said: String) {
-        val text = said.trim()
-        if (text.isEmpty() || busy) return
+    fun handle(said: String, fromVoice: Boolean = false) {
+        val reply = said.trim()
+        if (reply.isEmpty() || busy) return
+        val previous = alarmPhrase
+        val parsed = CommandParser.parse(reply)
+        if (previous != null && reply.equals("отмена", ignoreCase = true)) {
+            cancelClarification()
+            return
+        }
+        val continued = previous?.let { CommandParser.completeAlarm(it, reply) }
+        if (previous != null && parsed is Command.Unknown && !parsed.needsAlarmTime && continued == null) {
+            askAlarmTime(previous, fromVoice)
+            return
+        }
+        cancelClarification()
+        val text = if (continued != null) "$previous $reply" else reply
+        val initial = continued ?: parsed
+        if (initial is Command.Unknown && initial.needsAlarmTime) {
+            askAlarmTime(text, fromVoice)
+            return
+        }
         lifecycleScope.launch {
-            var command = CommandParser.parse(text)
+            var command = initial
             var viaAi = false
             if (command is Command.Unknown) {
                 if (settings.aiConfigured) {
@@ -463,19 +480,61 @@ open class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun askAlarmTime(text: String, fromVoice: Boolean) {
+        alarmPhrase = text
+        clarification = "На какое время поставить будильник?"
+        if (fromVoice) {
+            speaker.speak(requireNotNull(clarification)) {
+                if (alarmPhrase != null && lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) {
+                    startListening()
+                }
+            }
+        }
+    }
+
+    fun cancelClarification() {
+        alarmPhrase = null
+        clarification = null
+    }
+
+    fun toggleFavorite(text: String) {
+        if (text.isNotBlank()) commandHistory.toggleFavorite(text)
+    }
+
+    private fun refreshHistory() {
+        history.clear()
+        history.addAll(commandHistory.entries())
+        favorites.clear()
+        favorites.addAll(commandHistory.favorites())
+    }
+
     private fun undo(entry: Entry) {
-        val undo = entry.undo ?: return
-        val message = try { undo() } catch (e: Exception) { "Не удалось отменить: ${e.message}" }
-        val i = history.indexOfFirst { it.id == entry.id }
-        if (i >= 0) history[i] = entry.copy(undo = null, result = message, ok = true)
+        val action = entry.undo ?: return
+        if (busy) return
+        lifecycleScope.launch {
+            busy = true
+            try {
+                val message = when (action.kind) {
+                    UndoAction.Kind.EVENT -> { actions.deleteEvent(action.id); "Событие отменено" }
+                    UndoAction.Kind.TASK -> { googleTasks.delete(action.id); "Задача отменена" }
+                }
+                commandHistory.put(entry.copy(result = message, state = CommandState.UNDONE, undo = null))
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                commandHistory.put(entry.copy(result = "Не удалось отменить: ${e.message}", state = CommandState.FAILED))
+            } finally {
+                busy = false
+            }
+        }
     }
 
     private fun addEntry(said: String, outcome: Outcome, viaAi: Boolean) {
-        history.add(0, Entry(nextId++, said, outcome.message, outcome.ok, viaAi, outcome.undo))
+        commandHistory.put(Entry(UUID.randomUUID().toString(), said, outcome.message, outcome.state, viaAi, outcome.undo))
     }
 
     private fun addInfo(message: String) {
-        history.add(0, Entry(nextId++, "", message, ok = false))
+        addEntry("", Outcome(false, message), viaAi = false)
     }
 
     /** Saves the stack trace of a crash so the next launch can show it. */
