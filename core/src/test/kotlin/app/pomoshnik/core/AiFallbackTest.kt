@@ -6,6 +6,7 @@ import java.time.LocalDateTime
 import java.time.LocalTime
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
@@ -36,6 +37,18 @@ class AiFallbackTest {
     }
 
     @Test fun promptHasDate() = assertTrue(AiFallback.systemPrompt(now).contains("2026-11-25, среда, 12:00"))
+
+    @Test fun distinguishesDeviceRequestsFromConversation() {
+        assertTrue(AiFallback.isDeviceRequest("Пожалуйста, поставь будильник"))
+        assertTrue(AiFallback.isDiscussion("Как поставить будильник?"))
+        assertFalse(AiFallback.isDeviceRequest("Как поставить будильник?"))
+        assertFalse(AiFallback.isDeviceRequest("залупа лягушки"))
+    }
+
+    @Test fun repliesLocallyToUnusualPhrases() {
+        assertTrue(AiFallback.localReply("залупа лягушки").contains("залупа лягушки"))
+        assertTrue(AiFallback.localReply("Почему небо голубое?").contains("YandexGPT"))
+    }
 
     @Test fun describes() {
         val today = now.toLocalDate()

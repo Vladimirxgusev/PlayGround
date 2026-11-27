@@ -4,10 +4,8 @@ import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.provider.Settings as AndroidSettings
 import androidx.activity.compose.BackHandler
-import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -31,31 +29,24 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
-import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.selection.SelectionContainer
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.AutoAwesome
-import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Surface
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -72,6 +63,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
@@ -80,7 +72,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import app.pomoshnik.core.CommandState
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 
@@ -102,132 +93,91 @@ fun MainScreen(
     onUndo: (Entry) -> Unit,
     onSettings: () -> Unit,
 ) {
-    val wakeStatus by WakeListeningService.status.collectAsState()
     val colors = MaterialTheme.colorScheme
-    val canSend = input.isNotBlank() && !activity.busy
-    val send = { if (canSend) onSend(input) }
+    var showHistory by rememberSaveable { mutableStateOf(false) }
+    BackHandler(showHistory) { showHistory = false }
 
     Scaffold(
         containerColor = Color.Transparent,
-        modifier = Modifier.background(Brush.verticalGradient(listOf(colors.primaryContainer, colors.background))),
+        contentColor = colors.onBackground,
+        modifier = Modifier.background(
+            Brush.verticalGradient(listOf(colors.primaryContainer, colors.background, colors.background)),
+        ),
         topBar = {
             TopAppBar(
-                title = { Text("Секретутка", fontWeight = FontWeight.SemiBold) },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
+                title = { Text(if (showHistory) "История" else "Секретутка", fontWeight = FontWeight.SemiBold) },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = Color.Transparent,
+                    titleContentColor = colors.onBackground,
+                    actionIconContentColor = colors.onBackground,
+                ),
+                navigationIcon = {
+                    if (showHistory) IconButton(onClick = { showHistory = false }) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "К помощнику")
+                    }
+                },
                 actions = {
+                    if (!showHistory) IconButton(onClick = { showHistory = true }) {
+                        Icon(Icons.Filled.History, contentDescription = "История команд")
+                    }
                     IconButton(onClick = onSettings) { Icon(Icons.Filled.Settings, contentDescription = "Настройки") }
                 },
             )
         },
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding).imePadding(), contentAlignment = Alignment.TopCenter) {
-            Column(Modifier.widthIn(max = 560.dp).fillMaxSize()) {
-                if (activity.history.isEmpty()) {
-                    LazyColumn(
-                        modifier = Modifier.weight(1f).fillMaxWidth(),
-                        contentPadding = PaddingValues(horizontal = 24.dp, vertical = 16.dp),
-                        verticalArrangement = Arrangement.Center,
-                    ) {
+            Column(Modifier.widthIn(max = 580.dp).fillMaxSize()) {
+                val visible = if (showHistory) activity.history else activity.history.take(4)
+                LazyColumn(
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                    contentPadding = PaddingValues(horizontal = 20.dp, vertical = 12.dp),
+                    verticalArrangement = if (visible.isEmpty()) Arrangement.Center else Arrangement.spacedBy(14.dp),
+                    reverseLayout = visible.isNotEmpty(),
+                ) {
+                    if (visible.isEmpty()) {
                         item {
-                            Text("Чем помочь?", style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.SemiBold)
-                            Spacer(Modifier.height(12.dp))
-                        }
-                        item {
-                            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                examples.forEach { (label, example) ->
-                                    FilterChip(
-                                        selected = input == example,
-                                        onClick = { onInputChange(example) },
-                                        label = { Text(label) },
-                                        shape = CircleShape,
-                                    )
+                            if (showHistory) {
+                                Text("Здесь появятся выполненные команды и ответы.", color = colors.onSurfaceVariant)
+                            } else {
+                                Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                                    IconButton(
+                                        onClick = onMic,
+                                        modifier = Modifier.size(76.dp).background(
+                                            Brush.linearGradient(listOf(colors.primary, colors.tertiary)), CircleShape,
+                                        ),
+                                    ) {
+                                        Icon(Icons.Filled.Mic, contentDescription = "Продиктовать", tint = colors.onPrimary,
+                                            modifier = Modifier.size(30.dp))
+                                    }
+                                    Text("Чем помочь?", style = MaterialTheme.typography.displaySmall,
+                                        fontWeight = FontWeight.SemiBold, color = colors.onBackground)
+                                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        examples.forEach { (label, example) ->
+                                            FilterChip(selected = input == example, onClick = { onInputChange(example) },
+                                                label = { Text(label) }, shape = CircleShape)
+                                        }
+                                    }
                                 }
                             }
                         }
-                    }
-                } else {
-                    LazyColumn(
-                        modifier = Modifier.weight(1f).fillMaxWidth(),
-                        contentPadding = PaddingValues(horizontal = 18.dp, vertical = 12.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp),
-                        reverseLayout = true,
-                    ) {
-                        items(activity.history, key = { it.id }) { entry ->
+                    } else {
+                        items(visible, key = { it.id }) { entry ->
                             EntryCard(entry, onUndo, entry.said in activity.favorites, activity::toggleFavorite)
                         }
                     }
                 }
 
-                val status = when {
-                    activity.busy -> "Выполняю…"
-                    activity.listening && activity.partial.isNotEmpty() -> activity.partial
-                    activity.listening -> "Слушаю…"
-                    else -> activity.clarification ?: wakeStatus.orEmpty()
-                }
-                Surface(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp),
-                    shape = RoundedCornerShape(30.dp),
-                    color = colors.surface.copy(alpha = 0.88f),
-                    tonalElevation = 3.dp,
-                ) {
-                    Column(Modifier.padding(10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                        FavoriteCommands(activity.favorites, onInputChange)
-                        if (status.isNotEmpty()) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                if (activity.busy) {
-                                    CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-                                    Spacer(Modifier.width(8.dp))
-                                }
-                                Text(status, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium,
-                                    color = colors.primary)
-                                if (activity.clarification != null) {
-                                    TextButton(onClick = activity::cancelClarification) { Text("Отмена") }
-                                }
-                            }
-                        }
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            val micSize by animateDpAsState(
-                                if (activity.listening) 58.dp else 50.dp,
-                                animationSpec = spring(stiffness = 500f),
-                                label = "Микрофон",
-                            )
-                            IconButton(
-                                onClick = onMic,
-                                enabled = !activity.busy || activity.listening,
-                                modifier = Modifier.size(micSize)
-                                    .background(Brush.linearGradient(listOf(colors.primary, colors.tertiary)), CircleShape)
-                                    .border(1.dp, colors.onPrimary.copy(alpha = 0.32f), CircleShape),
-                            ) {
-                                Icon(
-                                    if (activity.listening) Icons.Filled.Stop else Icons.Filled.Mic,
-                                    contentDescription = if (activity.listening) "Остановить" else "Сказать команду",
-                                    tint = colors.onPrimary.copy(alpha = if (activity.busy && !activity.listening) 0.55f else 1f),
-                                )
-                            }
-                            Spacer(Modifier.width(8.dp))
-                            OutlinedTextField(
-                                value = input,
-                                onValueChange = onInputChange,
-                                modifier = Modifier.weight(1f),
-                                placeholder = { Text("Напиши команду") },
-                                singleLine = true,
-                                shape = CircleShape,
-                                colors = OutlinedTextFieldDefaults.colors(
-                                    focusedContainerColor = colors.surfaceVariant.copy(alpha = 0.45f),
-                                    unfocusedContainerColor = colors.surfaceVariant.copy(alpha = 0.30f),
-                                    unfocusedBorderColor = Color.Transparent,
-                                ),
-                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                                keyboardActions = KeyboardActions(onSend = { send() }),
-                            )
-                            if (input.isNotEmpty()) {
-                                IconButton(onClick = send, enabled = canSend) {
-                                    Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Отправить")
-                                }
-                            }
+                if (!showHistory) {
+                    Surface(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp),
+                        shape = RoundedCornerShape(30.dp),
+                        color = colors.surface,
+                        contentColor = colors.onSurface,
+                        border = BorderStroke(1.dp, colors.outlineVariant),
+                    ) {
+                        Column(Modifier.padding(10.dp)) {
+                            FavoriteCommands(activity.favorites, onInputChange)
+                            AssistantComposer(activity, input, onInputChange, onMic, onSend)
                         }
                     }
                 }
@@ -257,47 +207,52 @@ internal fun FavoriteCommands(commands: List<String>, onSelect: (String) -> Unit
 
 @Composable
 internal fun EntryCard(
-    entry: Entry, onUndo: (Entry) -> Unit, favorite: Boolean, onFavorite: (String) -> Unit,
+    entry: Entry,
+    onUndo: (Entry) -> Unit,
+    favorite: Boolean,
+    onFavorite: (String) -> Unit,
 ) {
+    val colors = MaterialTheme.colorScheme
+    val failed = entry.state == CommandState.FAILED
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(24.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.88f),
-        ),
+        colors = CardDefaults.cardColors(containerColor = colors.surface, contentColor = colors.onSurface),
+        border = BorderStroke(1.dp, colors.outlineVariant),
     ) {
-        Column(Modifier.padding(14.dp)) {
+        Column(Modifier.padding(start = 16.dp, end = 12.dp, top = 9.dp, bottom = 14.dp)) {
             if (entry.said.isNotEmpty()) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text(entry.state.title, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
-                        Text("«${entry.said}»", style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                        if (!entry.conversation) {
+                            Text(entry.state.title, style = MaterialTheme.typography.labelMedium,
+                                color = if (failed) colors.error else colors.primary)
+                        }
+                        Text(entry.said, style = MaterialTheme.typography.bodyMedium,
+                            color = colors.onSurfaceVariant, maxLines = 3, overflow = TextOverflow.Ellipsis)
                     }
                     IconButton(onClick = { onFavorite(entry.said) }) {
-                        Icon(if (favorite) Icons.Filled.Star else Icons.Filled.StarBorder,
-                            contentDescription = if (favorite) "Убрать из избранного" else "В избранное")
+                        Icon(
+                            if (favorite) Icons.Filled.Star else Icons.Filled.StarBorder,
+                            contentDescription = if (favorite) "Убрать из избранного" else "В избранное",
+                            tint = if (favorite) colors.primary else colors.onSurfaceVariant,
+                        )
                     }
                 }
             }
-            Row(verticalAlignment = Alignment.Top) {
-                Icon(
-                    if (entry.state == CommandState.FAILED) Icons.Filled.ErrorOutline else Icons.Filled.CheckCircle,
-                    contentDescription = null,
-                    modifier = Modifier.size(20.dp),
-                    tint = if (entry.state == CommandState.FAILED) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+            SelectionContainer {
+                Text(
+                    entry.result, style = MaterialTheme.typography.bodyLarge,
+                    color = colors.onSurface,
                 )
-                Spacer(Modifier.width(8.dp))
-                SelectionContainer(Modifier.weight(1f)) {
-                    Text(entry.result, style = MaterialTheme.typography.bodyLarge)
-                }
             }
-            if (entry.viaAi || entry.undo != null) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (entry.viaAi) {
-                        Icon(Icons.Filled.AutoAwesome, contentDescription = null, modifier = Modifier.size(14.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text("понял с помощью YandexGPT", style = MaterialTheme.typography.labelSmall)
+            if ((entry.conversation && entry.viaAi) || entry.undo != null) {
+                Row(Modifier.padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    if (entry.conversation && entry.viaAi) {
+                        Icon(Icons.Filled.AutoAwesome, contentDescription = null,
+                            tint = colors.primary, modifier = Modifier.size(14.dp))
+                        Spacer(Modifier.width(5.dp))
+                        Text("YandexGPT", style = MaterialTheme.typography.labelSmall, color = colors.onSurfaceVariant)
                     }
                     Spacer(Modifier.weight(1f))
                     if (entry.undo != null) TextButton(onClick = { onUndo(entry) }) { Text("Отменить") }
@@ -307,7 +262,7 @@ internal fun EntryCard(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun SettingsScreen(
     settings: Settings,
@@ -315,8 +270,9 @@ fun SettingsScreen(
     requestCalendarPermission: () -> Unit,
     onBack: () -> Unit,
     onToggleWake: () -> Unit,
+    appearance: AssistantAppearance,
+    onAppearanceChange: (AssistantAppearance) -> Unit,
 ) {
-    BackHandler(onBack = onBack)
     val context = LocalContext.current
     val wakeEnabled by WakeListeningService.enabled.collectAsState()
     var apiKey by remember { mutableStateOf(settings.yandexApiKey) }
@@ -336,6 +292,7 @@ fun SettingsScreen(
         onBack()
     }
 
+    BackHandler(onBack = save)
     Scaffold(
         topBar = {
             TopAppBar(
@@ -355,6 +312,32 @@ fun SettingsScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            Text("Внешний вид", style = MaterialTheme.typography.titleLarge)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                for (mode in AssistantThemeMode.entries) {
+                    FilterChip(selected = mode == appearance.mode,
+                        onClick = { onAppearanceChange(appearance.copy(mode = mode)) },
+                        label = { Text(mode.label) }, shape = CircleShape)
+                }
+            }
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                for (accent in AssistantAccent.entries) {
+                    FilterChip(
+                        selected = accent == appearance.accent,
+                        onClick = { onAppearanceChange(appearance.copy(accent = accent)) },
+                        label = { Text(accent.label) },
+                        leadingIcon = { Box(Modifier.size(14.dp).background(accent.light, CircleShape)) },
+                        shape = CircleShape,
+                    )
+                }
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Крупный текст ответов", Modifier.weight(1f))
+                Switch(checked = appearance.largeAnswers,
+                    onCheckedChange = { onAppearanceChange(appearance.copy(largeAnswers = it)) })
+            }
+            HorizontalDivider()
+
             Text("Помощник по умолчанию", style = MaterialTheme.typography.titleMedium)
             Text(
                 "Чтобы вызывать «Секретутку» удержанием кнопки питания, выберите его в " +
@@ -431,9 +414,8 @@ fun SettingsScreen(
             HorizontalDivider()
             Text("ИИ для сложных фраз и вопросов (YandexGPT)", style = MaterialTheme.typography.titleMedium)
             Text(
-                "Простые команды понимаются без интернета. Фразы, которые правила не поняли, " +
-                    "отправляются в YandexGPT — он работает в России без VPN. " +
-                    "Нужны API-ключ сервисного аккаунта с ролью ai.languageModels.user и ID каталога из Yandex Cloud.",
+                "YandexGPT отвечает на вопросы и ведёт диалог. Для контекста он получает до четырёх " +
+                    "последних реплик текущего сеанса. Нужны API-ключ и ID каталога Yandex Cloud.",
                 style = MaterialTheme.typography.bodyMedium,
             )
             OutlinedTextField(
@@ -451,11 +433,17 @@ fun SettingsScreen(
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(selected = model == "yandexgpt-lite/latest",
+                    onClick = { model = "yandexgpt-lite/latest" }, label = { Text("Быстрая") })
+                FilterChip(selected = model == "yandexgpt/latest",
+                    onClick = { model = "yandexgpt/latest" }, label = { Text("Подробная") })
+            }
             OutlinedTextField(
                 value = model,
                 onValueChange = { model = it },
                 label = { Text("Модель") },
-                supportingText = { Text("yandexgpt-lite/latest — быстрее и дешевле, yandexgpt/latest — умнее") },
+                supportingText = { Text("Для подробных ответов выбери yandexgpt/latest, если модель доступна твоему тарифу.") },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )

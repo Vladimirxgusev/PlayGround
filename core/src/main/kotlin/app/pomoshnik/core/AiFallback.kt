@@ -58,6 +58,7 @@ object AiFallback {
             - "answer": для question — короткий ответ по-русски, 1–3 предложения, без markdown.
 
             Правила:
+            - Создавай команду только при ясной просьбе что-либо сделать на телефоне.
             - "напомни ..." — это task; встречи, приёмы, дни рождения, мероприятия — event;
             - относительные даты ("завтра", "в пятницу", "через неделю") считай от текущей даты;
             - если время сказано без "утра/вечера" и речь о встрече или делах, выбирай разумное
@@ -68,15 +69,56 @@ object AiFallback {
         """.trimIndent()
     }
 
-    /** Prompt for answering a free-form question directly. */
+    private val actionOpening = Regex(
+        """^(?:пожалуйста[, ]+)?(?:(?:можешь|можно) +)?(?:постав|завед|установ|включ|запуст|засек|добав|созда|запиш|напомн|запланир|назнач)[\p{L}]*(?=$|[\s,!?])""",
+        RegexOption.IGNORE_CASE,
+    )
+    private val discussionOpening = Regex(
+        """^(?:почему|зачем|что|кто|как|сколько|где|когда|какой|какая|какие|расскажи|объясни|сравни|придумай|посоветуй)(?:\s|[?!,.]|$)""",
+        RegexOption.IGNORE_CASE,
+    )
+
+    fun isDeviceRequest(text: String): Boolean = actionOpening.containsMatchIn(text.trim())
+
+    fun isDiscussion(text: String): Boolean = discussionOpening.containsMatchIn(text.trim())
+
+    fun localReply(text: String, serviceUnavailable: Boolean = false): String {
+        val words = RuText.normalize(text).trimEnd('?', '!', '.', ',')
+        return when {
+            words in setOf("привет", "здравствуй", "доброе утро", "добрый вечер") ->
+                "Привет! Я на связи. Что обсудим?"
+            words in setOf("спасибо", "спасибо тебе", "благодарю") -> "Пожалуйста!"
+            isDiscussion(text) || text.trimEnd().endsWith("?") || isDeviceRequest(text) || words.split(' ').size > 5 ->
+                if (serviceUnavailable) {
+                    "Сейчас не удалось получить ответ от YandexGPT. Давай попробуем ещё раз чуть позже."
+                } else {
+                    "Для развёрнутого ответа мне нужен YandexGPT. Подключи его в настройках «Секретутки»."
+                }
+            else -> {
+                val phrase = text.trim().take(110)
+                when (Math.floorMod(words.hashCode(), 3)) {
+                    0 -> "«$phrase» звучит как пароль в клуб любителей абсурда. Считай, что я тебя впустила."
+                    1 -> "«$phrase» — отличное название для странной сказки. Она начинается дождливой ночью, когда лягушки решили открыть детективное агентство."
+                    else -> "Записываю «$phrase» в словарь выражений, которыми удобно начинать очень неожиданный разговор."
+                }
+            }
+        }
+    }
+
+    /** Prompt for answering conversation directly, independent of device actions. */
     fun answerPrompt(now: LocalDateTime): String {
         val date = now.toLocalDate().format(DateTimeFormatter.ISO_LOCAL_DATE)
         val weekday = weekdayNames[now.dayOfWeek.value - 1]
         return """
-            Ты — голосовой помощник «Секретутка» на телефоне. Сегодня $date, $weekday.
-            Отвечай по-русски коротко и по делу: 1–3 предложения, без markdown и списков,
-            так, чтобы ответ было удобно прослушать. Если не знаешь точного ответа или он зависит
-            от свежих данных, честно скажи об этом.
+            Ты — «Секретутка», русскоязычный голосовой помощник на телефоне. Сегодня $date, $weekday.
+            Веди естественный диалог. Отвечай на вопрос сразу и конкретно. На простой вопрос отвечай коротко,
+            но если человеку нужно объяснение, сравнение или инструкция, дай достаточно деталей и пример.
+            Разделяй длинный ответ на короткие абзацы, допустимы обычные маркеры списка. Без markdown-разметки.
+            На шутки, абсурдные словосочетания, просторечие или мат реагируй по сути, легко и с уместным юмором.
+            В короткой странной фразе можно увидеть игру слов или предложить мини-историю.
+            Если контекста недостаточно для полезного ответа на серьёзный вопрос, задай один точный вопрос.
+            Не выдумывай факты, источники, новости, цифры или выполненные действия. Если нужны свежие сведения,
+            которых у тебя нет, скажи об этом. Не утверждай, что изменил что-либо на телефоне.
         """.trimIndent()
     }
 
@@ -86,7 +128,7 @@ object AiFallback {
         val title = a.title?.trim()?.takeIf { it.isNotEmpty() && it.lowercase() != "null" }
         return when (a.type?.trim()?.lowercase()) {
             "alarm" -> {
-                val t = time ?: return Command.Unknown(original, "ИИ не смог определить время будильника")
+                val t = time ?: return Command.Unknown(original, "ИИ не смог определить время будильника", needsAlarmTime = true)
                 val days = a.days.orEmpty().mapNotNull { dayOf(it) }.toSet()
                 Command.SetAlarm(t.hour, t.minute, title, days)
             }

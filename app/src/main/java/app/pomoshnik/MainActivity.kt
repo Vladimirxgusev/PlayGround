@@ -12,19 +12,18 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.ui.graphics.Color
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.withResumed
 import app.pomoshnik.core.AiFallback
@@ -60,6 +59,12 @@ open class MainActivity : ComponentActivity() {
     val history = mutableStateListOf<Entry>()
     var listening by mutableStateOf(false)
     var partial by mutableStateOf("")
+    var notice by mutableStateOf<String?>(null)
+        private set
+    private var appearance by mutableStateOf(AssistantAppearance())
+    private var panelBaseline by mutableStateOf<String?>(null)
+    val panelEntry: Entry? get() = history.firstOrNull()?.takeUnless { it.id == panelBaseline }
+    private val conversation = ArrayDeque<YandexGpt.Turn>()
     var busy by mutableStateOf(false)
     var showSettings by mutableStateOf(false)
 
@@ -122,8 +127,10 @@ open class MainActivity : ComponentActivity() {
         installCrashReporter()
         enableEdgeToEdge()
         settings = Settings(this)
+        appearance = settings.appearance
         commandHistory.preferences.registerOnSharedPreferenceChangeListener(historyListener)
         refreshHistory()
+        if (compactPanel) panelBaseline = history.firstOrNull()?.id
         actions = Actions(this, settings)
         googleTasks = GoogleTasks(this).also { it.attach(googleConsent) }
         info = InfoService(this, settings)
@@ -132,7 +139,7 @@ open class MainActivity : ComponentActivity() {
             context = this,
             onPartial = { partial = it },
             onResult = { partial = ""; handle(it, fromVoice = true) },
-            onError = { partial = ""; addInfo(it) },
+            onError = { partial = ""; notice = it },
             onListening = { listening = it },
         )
 
@@ -155,28 +162,14 @@ open class MainActivity : ComponentActivity() {
                 }
             }
             val onMic = { if (listening) speech.stop() else startListening() }
-            val colors = if (isSystemInDarkTheme()) {
-                darkColorScheme(
-                    primary = Color(0xFFAAC8FF),
-                    onPrimary = Color(0xFF0C2350),
-                    tertiary = Color(0xFFB6AAFF),
-                    primaryContainer = Color(0xFF202E50),
-                    background = Color(0xFF101522),
-                    surface = Color(0xFF1B2336),
-                    surfaceVariant = Color(0xFF303A50),
-                )
-            } else {
-                lightColorScheme(
-                    primary = Color(0xFF315AC2),
-                    onPrimary = Color.White,
-                    tertiary = Color(0xFF6545BF),
-                    primaryContainer = Color(0xFFE0E8FF),
-                    background = Color(0xFFF5F7FF),
-                    surface = Color(0xFFFCFCFF),
-                    surfaceVariant = Color(0xFFE3E8F5),
-                )
-            }
-            MaterialTheme(colorScheme = colors) {
+            AssistantTheme(appearance) {
+                val darkIcons = !compactPanel && MaterialTheme.colorScheme.background.luminance() > 0.5f
+                SideEffect {
+                    WindowCompat.getInsetsController(window, window.decorView).apply {
+                        isAppearanceLightStatusBars = darkIcons
+                        isAppearanceLightNavigationBars = darkIcons
+                    }
+                }
                 if (compactPanel) {
                     AssistPanel(
                         activity = this,
@@ -199,6 +192,11 @@ open class MainActivity : ComponentActivity() {
                         },
                         onBack = { showSettings = false },
                         onToggleWake = { toggleWakeListening() },
+                        appearance = appearance,
+                        onAppearanceChange = {
+                            settings.appearance = it
+                            appearance = it
+                        },
                     )
                 } else {
                     MainScreen(
@@ -230,6 +228,7 @@ open class MainActivity : ComponentActivity() {
                 openAssistPanel(intent.action)
                 return
             }
+            panelBaseline = history.firstOrNull()?.id
             compactPanel = true
         }
         handleLaunchIntent(intent, firstLaunch = false)
@@ -347,6 +346,7 @@ open class MainActivity : ComponentActivity() {
             return
         }
         partial = ""
+        notice = null
         speaker.stop()
         if (speech.isAvailable) {
             speech.start()
@@ -365,8 +365,15 @@ open class MainActivity : ComponentActivity() {
     fun handle(said: String, fromVoice: Boolean = false) {
         val reply = said.trim()
         if (reply.isEmpty() || busy) return
+        notice = null
         val previous = alarmPhrase
-        val parsed = CommandParser.parse(reply)
+        val parsed = CommandParser.parse(reply).let { command ->
+            val mutatesDevice = command is Command.SetAlarm || command is Command.SetTimer ||
+                command is Command.CreateTask || command is Command.CreateEvent
+            if (AiFallback.isDiscussion(reply) && (mutatesDevice || command is Command.Unknown)) {
+                Command.Question(reply)
+            } else command
+        }
         if (previous != null && reply.equals("отмена", ignoreCase = true)) {
             cancelClarification()
             return
@@ -383,29 +390,65 @@ open class MainActivity : ComponentActivity() {
             askAlarmTime(text, fromVoice)
             return
         }
-        lifecycleScope.launch {
-            var command = initial
-            var viaAi = false
-            if (command is Command.Unknown) {
-                if (settings.aiConfigured) {
-                    busy = true
-                    viaAi = true
-                    command = try {
-                        val reply = YandexGpt.complete(settings, AiFallback.systemPrompt(LocalDateTime.now()), text)
-                        AiFallback.toCommand(YandexGpt.parseAnswer(reply), text, LocalDateTime.now())
-                    } catch (e: Exception) {
-                        Command.Unknown(text, "ИИ недоступен: ${e.message}")
-                    } finally {
-                        busy = false
-                    }
-                } else {
-                    command = command.copy(
-                        reason = command.reason + ". Подключите YandexGPT в настройках, чтобы понимать любые фразы.",
-                    )
-                }
-            }
-            run(text, command, viaAi)
+        if (initial is Command.Unknown) {
+            if (settings.aiConfigured && AiFallback.isDeviceRequest(text)) resolveDeviceRequest(text)
+            else replyTo(text, text)
+        } else {
+            run(text, initial, viaAi = false)
         }
+    }
+
+    private fun resolveDeviceRequest(text: String) {
+        lifecycleScope.launch {
+            busy = true
+            val command = try {
+                val now = LocalDateTime.now()
+                val response = YandexGpt.complete(settings, AiFallback.systemPrompt(now), text)
+                AiFallback.toCommand(YandexGpt.parseAnswer(response), text, now)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                Command.Question(text)
+            } finally {
+                busy = false
+            }
+            if (command is Command.Unknown && command.needsAlarmTime) {
+                askAlarmTime(text, fromVoice = false)
+            } else {
+                run(text, if (command is Command.Unknown) Command.Question(text) else command, viaAi = true)
+            }
+        }
+    }
+
+    private fun replyTo(said: String, text: String) {
+        lifecycleScope.launch {
+            busy = true
+            try {
+                val response = if (settings.aiConfigured) {
+                    YandexGpt.reply(settings, text, conversation.toList())
+                } else null
+                if (response != null) {
+                    conversation.addLast(YandexGpt.Turn(text.take(1500), response.take(2000)))
+                    if (conversation.size > 4) conversation.removeFirst()
+                    showReply(said, response, viaAi = true)
+                } else {
+                    showReply(said, AiFallback.localReply(text), viaAi = false)
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                showReply(said, AiFallback.localReply(text, serviceUnavailable = true), viaAi = false)
+            } finally {
+                busy = false
+            }
+        }
+    }
+
+    private fun showReply(said: String, response: String, viaAi: Boolean) {
+        commandHistory.put(Entry(
+            UUID.randomUUID().toString(), said, response, CommandState.DONE, viaAi, conversation = true,
+        ))
+        if (settings.speakAnswers) speaker.speak(response)
     }
 
     private fun run(said: String, command: Command, viaAi: Boolean) {
@@ -426,14 +469,8 @@ open class MainActivity : ComponentActivity() {
             is Command.Unknown -> addEntry(said, Outcome(false, command.reason), viaAi)
             is Command.Now -> answer(said, viaAi) { InfoFormat.now(command.kind, LocalDateTime.now()) }
             is Command.Currency -> answer(said, viaAi) { info.rates(command) }
-            is Command.Answer -> answer(said, viaAi = true) { command.text }
-            is Command.Question -> if (settings.aiConfigured) {
-                answer(said, viaAi = true) {
-                    YandexGpt.complete(settings, AiFallback.answerPrompt(LocalDateTime.now()), command.text).trim()
-                }
-            } else {
-                addEntry(said, Outcome(false, "Чтобы отвечать на любые вопросы, подключите YandexGPT в настройках"), viaAi)
-            }
+            is Command.Answer -> showReply(said, command.text, viaAi = true)
+            is Command.Question -> replyTo(said, command.text)
             is Command.Weather -> {
                 val needLocation = command.city == null && settings.homeCity.isBlank() &&
                     ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) !=

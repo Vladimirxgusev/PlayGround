@@ -8,25 +8,37 @@ import org.json.JSONObject
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
+import java.time.LocalDateTime
 
 /** YandexGPT (Yandex Cloud Foundation Models). Reachable from Russia without a VPN. */
 object YandexGpt {
     private const val ENDPOINT = "https://llm.api.cloud.yandex.net/foundationModels/v1/completion"
 
-    suspend fun complete(settings: Settings, system: String, user: String): String = withContext(Dispatchers.IO) {
+    data class Turn(val user: String, val answer: String)
+
+    suspend fun complete(settings: Settings, system: String, user: String): String =
+        request(settings, JSONArray().put(message("system", system)).put(message("user", user)), 0.1, 300)
+
+    suspend fun reply(settings: Settings, user: String, history: List<Turn>): String {
+        val messages = JSONArray().put(message("system", AiFallback.answerPrompt(LocalDateTime.now())))
+        history.takeLast(4).forEach { turn ->
+            messages.put(message("user", turn.user)).put(message("assistant", turn.answer))
+        }
+        messages.put(message("user", user))
+        return request(settings, messages, 0.45, 750).trim().ifBlank { throw IOException("ИИ вернул пустой ответ") }
+    }
+
+    private fun message(role: String, text: String) = JSONObject().put("role", role).put("text", text)
+
+    private suspend fun request(
+        settings: Settings, messages: JSONArray, temperature: Double, maxTokens: Int,
+    ): String = withContext(Dispatchers.IO) {
         val folder = settings.yandexFolderId
         val body = JSONObject()
             .put("modelUri", "gpt://$folder/${settings.yandexModel}")
-            .put(
-                "completionOptions",
-                JSONObject().put("stream", false).put("temperature", 0.1).put("maxTokens", "300"),
-            )
-            .put(
-                "messages",
-                JSONArray()
-                    .put(JSONObject().put("role", "system").put("text", system))
-                    .put(JSONObject().put("role", "user").put("text", user)),
-            )
+            .put("completionOptions", JSONObject().put("stream", false)
+                .put("temperature", temperature).put("maxTokens", maxTokens.toString()))
+            .put("messages", messages)
 
         val conn = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
@@ -74,6 +86,10 @@ object YandexGpt {
             durationMinutes = int("duration_minutes"),
             days = days,
             timerSeconds = int("timer_seconds"),
+            city = str("city"),
+            currencies = o.optJSONArray("currencies")?.let { a -> List(a.length()) { a.optString(it) } },
+            amount = o.optDouble("amount").takeIf { it.isFinite() },
+            answer = str("answer"),
         )
     }
 }

@@ -6,6 +6,17 @@ import android.content.Context
 class Settings(context: Context) {
     private val prefs = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
 
+    var appearance: AssistantAppearance
+        get() = AssistantAppearance(
+            AssistantThemeMode.entries.firstOrNull { it.name == prefs.getString("theme_mode", null) }
+                ?: AssistantThemeMode.SYSTEM,
+            AssistantAccent.entries.firstOrNull { it.name == prefs.getString("theme_accent", null) }
+                ?: AssistantAccent.ICE,
+            prefs.getBoolean("large_answers", false),
+        )
+        set(value) = prefs.edit().putString("theme_mode", value.mode.name)
+            .putString("theme_accent", value.accent.name).putBoolean("large_answers", value.largeAnswers).apply()
+
     var yandexApiKey: String
         get() = prefs.getString("yandex_api_key", "").orEmpty()
         set(v) = prefs.edit().putString("yandex_api_key", v.trim()).apply()
