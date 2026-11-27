@@ -1,6 +1,6 @@
 package app.pomoshnik
 
-import android.app.Activity
+import android.content.Context
 import android.content.Intent
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.IntentSenderRequest
@@ -25,7 +25,7 @@ import java.net.URL
  * Writes tasks to Google Tasks through its REST API. Sign-in uses Google Play services
  * authorization: the first time, the user picks an account and allows access to Tasks.
  */
-class GoogleTasks(private val activity: Activity) {
+class GoogleTasks(private val context: Context) {
 
     private var consentLauncher: ActivityResultLauncher<IntentSenderRequest>? = null
     private var pendingConsent: CompletableDeferred<String?>? = null
@@ -41,7 +41,7 @@ class GoogleTasks(private val activity: Activity) {
     /** Called by the activity with the consent screen's result. */
     fun onConsentResult(data: Intent?) {
         val token = try {
-            Identity.getAuthorizationClient(activity).getAuthorizationResultFromIntent(data).accessToken
+            Identity.getAuthorizationClient(context).getAuthorizationResultFromIntent(data).accessToken
         } catch (_: ApiException) {
             null
         }
@@ -52,14 +52,14 @@ class GoogleTasks(private val activity: Activity) {
     /** Returns an access token, showing the account/consent screen if needed. */
     private suspend fun accessToken(): String {
         val result = try {
-            Identity.getAuthorizationClient(activity).authorize(request).await()
+            Identity.getAuthorizationClient(context).authorize(request).await()
         } catch (e: ApiException) {
             throw IOException(explain(e))
         }
         if (!result.hasResolution()) {
             return result.accessToken ?: throw IOException("Google не выдал доступ к Задачам")
         }
-        val launcher = consentLauncher ?: throw IOException("Окно входа недоступно")
+        val launcher = consentLauncher ?: throw GoogleTasksConsentRequired()
         val deferred = CompletableDeferred<String?>()
         pendingConsent = deferred
         launcher.launch(IntentSenderRequest.Builder(result.pendingIntent!!.intentSender).build())
@@ -106,7 +106,7 @@ class GoogleTasks(private val activity: Activity) {
         }
         if (code == 401 && !retried) {
             // Expired token: drop it from the cache and try once more.
-            withContext(Dispatchers.IO) { runCatching { GoogleAuthUtil.clearToken(activity, token) } }
+            withContext(Dispatchers.IO) { runCatching { GoogleAuthUtil.clearToken(context, token) } }
             return call(method, url, body, retried = true)
         }
         if (code !in 200..299) {
@@ -132,3 +132,7 @@ class GoogleTasks(private val activity: Activity) {
         private const val BASE = "https://tasks.googleapis.com/tasks/v1"
     }
 }
+
+internal class GoogleTasksConsentRequired : IOException(
+    "Сначала создайте задачу в «Секретутке» на телефоне и разрешите доступ к Google Задачам.",
+)

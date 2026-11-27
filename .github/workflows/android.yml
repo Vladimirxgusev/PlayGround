@@ -6,6 +6,7 @@ on:
     paths:
       - "app/**"
       - "core/**"
+      - "wear/**"
       - "*.gradle.kts"
       - "gradle/**"
       - "gradle.properties"
@@ -84,7 +85,7 @@ jobs:
         run: ./gradlew :core:test --console=plain
 
       - name: Build APK
-        run: ./gradlew :app:assembleDebug --console=plain
+        run: ./gradlew :app:assembleDebug :wear:assembleDebug --console=plain
 
       # Google Cloud needs this fingerprint for the Android OAuth client (Google Tasks sign-in).
       - name: Show signing fingerprint
@@ -113,5 +114,11 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: sekretutka-apk
-          path: sekretutka-*.apk
+          path: sekretutka-${{ github.run_number }}.apk
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sekretutka-wear-apk
+          path: wear/build/outputs/apk/debug/wear-debug.apk
           if-no-files-found: error
