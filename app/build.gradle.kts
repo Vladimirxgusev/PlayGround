@@ -12,6 +12,8 @@ android {
     namespace = "app.pomoshnik"
     compileSdk = 35
 
+    sourceSets["main"].res.srcDir(rootProject.file("app/src/main/branding/res"))
+
     defaultConfig {
         applicationId = "app.pomoshnik"
         minSdk = 26

@@ -11,6 +11,8 @@ android {
     namespace = "app.pomoshnik.wear"
     compileSdk = 35
 
+    sourceSets["main"].res.srcDir(rootProject.file("app/src/main/branding/res"))
+
     defaultConfig {
         // Wear OS Data Layer requires the same application ID and signing key on both devices.
         applicationId = "app.pomoshnik"
