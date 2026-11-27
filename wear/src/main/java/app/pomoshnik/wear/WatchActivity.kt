@@ -160,24 +160,13 @@ class WatchActivity : ComponentActivity(), DataClient.OnDataChangedListener {
     private fun confirmCommand() {
         if (sending) return
         if (pendingId() != null) {
-            submitTask()
+            sendToPhone()
             return
         }
         // Recheck after editing and when the confirmation spans a change of date.
         refreshCommand()
         when (val parsed = command) {
-            is Command.CreateTask -> submitTask()
-            is Command.SetAlarm -> openClock(
-                Intent(AlarmClock.ACTION_SET_ALARM)
-                    .putExtra(AlarmClock.EXTRA_HOUR, parsed.hour)
-                    .putExtra(AlarmClock.EXTRA_MINUTES, parsed.minute)
-                    .putExtra(AlarmClock.EXTRA_MESSAGE, parsed.label)
-                    .apply {
-                        if (parsed.days.isNotEmpty()) {
-                            putExtra(AlarmClock.EXTRA_DAYS, ArrayList(parsed.days.sorted().map { it.value % 7 + 1 }))
-                        }
-                    },
-            )
+            is Command.CreateTask, is Command.SetAlarm -> sendToPhone()
             is Command.SetTimer -> openClock(
                 Intent(AlarmClock.ACTION_SET_TIMER)
                     .putExtra(AlarmClock.EXTRA_LENGTH, parsed.seconds)
@@ -200,7 +189,7 @@ class WatchActivity : ComponentActivity(), DataClient.OnDataChangedListener {
         }
     }
 
-    private fun submitTask() {
+    private fun sendToPhone() {
         val existingId = pendingId()
         val text = input.text.toString().trim()
         val id = existingId ?: UUID.randomUUID().toString()
@@ -208,11 +197,11 @@ class WatchActivity : ComponentActivity(), DataClient.OnDataChangedListener {
         val waiting = "В очереди. Ждём подтверждения телефона."
         if (!store.edit().putString("id", id).putString("text", text)
                 .putString("enteredAt", enteredAt).putString("status", waiting).commit()) {
-            status.text = "Не удалось сохранить задачу для отправки."
+            status.text = "Не удалось сохранить команду для отправки."
             return
         }
         sending = true
-        status.text = "Отправляем задачу…"
+        status.text = "Отправляем команду…"
         input.clearFocus()
         input.windowInsetsController?.hide(WindowInsets.Type.ime())
         updateControls()
@@ -272,7 +261,7 @@ class WatchActivity : ComponentActivity(), DataClient.OnDataChangedListener {
         val label = when {
             pending -> "Повторить отправку"
             command is Command.CreateTask -> "Добавить на телефон"
-            command is Command.SetAlarm -> "Поставить будильник"
+            command is Command.SetAlarm -> "Будильник на телефоне"
             command is Command.SetTimer -> "Запустить таймер"
             else -> null
         }

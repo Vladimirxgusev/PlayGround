@@ -36,10 +36,15 @@ class WatchTaskListener : WearableListenerService() {
             val text = payload.getString(WatchTaskSync.TEXT)?.trim().orEmpty()
             if (text.isBlank() || text.length > WatchTaskSync.MAX_TEXT_LENGTH) continue
             val enteredAt = payload.getString(WatchTaskSync.ENTERED_AT) ?: continue
-            if (runCatching { LocalDateTime.parse(enteredAt) }.isFailure) continue
+            val timestamp = runCatching { LocalDateTime.parse(enteredAt) }.getOrNull() ?: continue
+            val command = CommandParser.parse(text, timestamp)
 
             val work = OneTimeWorkRequestBuilder<WatchTaskWorker>()
-                .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+                .apply {
+                    if (command is Command.CreateTask) {
+                        setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+                    }
+                }
                 .setInputData(workDataOf("id" to id, WatchTaskSync.TEXT to text, WatchTaskSync.ENTERED_AT to enteredAt))
                 .build()
             WorkManager.getInstance(this).enqueueUniqueWork("watch-task-$id", ExistingWorkPolicy.KEEP, work)
@@ -58,9 +63,9 @@ class WatchTaskWorker(context: Context, parameters: WorkerParameters) : Coroutin
         val outcome = when (saved) {
             null -> {
                 if (!journal.edit().putString(id, IN_PROGRESS).commit()) return Result.retry()
-                createTask(text, LocalDateTime.parse(enteredAt))
+                executeCommand(id, text, LocalDateTime.parse(enteredAt))
             }
-            IN_PROGRESS -> Outcome(false, "Проверьте Google Задачи на телефоне перед повторной отправкой.")
+            IN_PROGRESS -> Outcome(false, "Проверьте результат на телефоне перед повторной отправкой.")
             else -> JSONObject(saved).let { Outcome(it.getBoolean("ok"), it.getString("message")) }
         }
 
@@ -82,11 +87,24 @@ class WatchTaskWorker(context: Context, parameters: WorkerParameters) : Coroutin
         }
     }
 
-    private suspend fun createTask(text: String, enteredAt: LocalDateTime): Outcome {
-        val command = CommandParser.parse(text, enteredAt)
-        if (command !is Command.CreateTask) {
-            return Outcome(false, "Скажите «добавь задачу» и её название.")
+    private suspend fun executeCommand(id: String, text: String, enteredAt: LocalDateTime): Outcome {
+        return when (val command = CommandParser.parse(text, enteredAt)) {
+            is Command.CreateTask -> createTask(command)
+            is Command.SetAlarm -> {
+                val queued = WatchAlarms.queue(applicationContext).edit()
+                    .putString(id, JSONObject().put("text", text).put("enteredAt", enteredAt.toString()).toString())
+                    .commit()
+                if (queued) {
+                    Outcome(true, "Будильник передан. Если «Секретутка» закрыта, открой её на телефоне.")
+                } else {
+                    Outcome(false, "Телефон не смог сохранить команду будильника.")
+                }
+            }
+            else -> Outcome(false, "С часов можно передать задачу или будильник.")
         }
+    }
+
+    private suspend fun createTask(command: Command.CreateTask): Outcome {
         return try {
             val outcome = GoogleTasks(applicationContext).create(command)
             Outcome(outcome.ok, "Добавлено в Google Задачи: ${command.title}")

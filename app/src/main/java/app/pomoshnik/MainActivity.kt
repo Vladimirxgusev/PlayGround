@@ -3,6 +3,7 @@ package app.pomoshnik
 import android.Manifest
 import android.app.Activity
 import android.content.Intent
+import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -48,6 +49,12 @@ class MainActivity : ComponentActivity() {
     private lateinit var googleTasks: GoogleTasks
     private lateinit var info: InfoService
     private lateinit var speaker: Speaker
+    private val watchAlarms by lazy { WatchAlarms.queue(this) }
+    private val watchAlarmListener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
+        if (lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) {
+            handleWatchAlarm()
+        }
+    }
     private var pendingWeather: Pair<String, Command.Weather>? = null
 
     // UI state
@@ -158,6 +165,17 @@ class MainActivity : ComponentActivity() {
         handleLaunchIntent(intent, firstLaunch = false)
     }
 
+    override fun onPostResume() {
+        super.onPostResume()
+        watchAlarms.registerOnSharedPreferenceChangeListener(watchAlarmListener)
+        handleWatchAlarm()
+    }
+
+    override fun onPause() {
+        watchAlarms.unregisterOnSharedPreferenceChangeListener(watchAlarmListener)
+        super.onPause()
+    }
+
     override fun onStop() {
         super.onStop()
         speech.stop()
@@ -166,6 +184,22 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         super.onDestroy()
         speaker.shutdown()
+    }
+
+    private fun handleWatchAlarm() {
+        val alarm = WatchAlarms.next(watchAlarms) ?: return
+        // Dispatch only while this activity is visible. Prevent duplicate dispatch if Clock takes focus.
+        watchAlarms.unregisterOnSharedPreferenceChangeListener(watchAlarmListener)
+        val outcome = try {
+            if (watchAlarms.edit().remove(alarm.id).commit()) {
+                actions.setAlarm(alarm.command)
+            } else {
+                Outcome(false, "Не удалось обработать будильник с часов. Откройте приложение ещё раз.")
+            }
+        } finally {
+            watchAlarms.registerOnSharedPreferenceChangeListener(watchAlarmListener)
+        }
+        addEntry(alarm.text, outcome, viaAi = false)
     }
 
     private fun handleLaunchIntent(intent: Intent?, firstLaunch: Boolean) {
