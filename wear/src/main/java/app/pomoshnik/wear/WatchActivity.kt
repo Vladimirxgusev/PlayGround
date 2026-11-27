@@ -4,6 +4,7 @@ import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.provider.AlarmClock
 import android.speech.RecognizerIntent
 import android.text.InputFilter
 import android.view.Gravity
@@ -15,7 +16,11 @@ import android.widget.ScrollView
 import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.widget.doAfterTextChanged
 import androidx.lifecycle.lifecycleScope
+import app.pomoshnik.core.Command
+import app.pomoshnik.core.CommandParser
+import app.pomoshnik.core.Describe
 import app.pomoshnik.core.WatchTaskSync
 import com.google.android.gms.wearable.DataClient
 import com.google.android.gms.wearable.DataEvent
@@ -37,6 +42,7 @@ class WatchActivity : ComponentActivity(), DataClient.OnDataChangedListener {
     private lateinit var mic: Button
     private lateinit var send: Button
     private var sending = false
+    private var command: Command? = null
 
     private val voice = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == RESULT_OK && pendingId() == null) {
@@ -54,8 +60,8 @@ class WatchActivity : ComponentActivity(), DataClient.OnDataChangedListener {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
             val width = resources.displayMetrics.widthPixels
-            val side = if (resources.configuration.isScreenRound) width / 7 else width / 16
-            setPadding(side, width / 8, side, width / 8)
+            val side = if (resources.configuration.isScreenRound) width / 6 else width / 16
+            setPadding(side, width / 7, side, width / 7)
         }
         content.addView(TextView(this).apply {
             text = "Секретутка"
@@ -63,24 +69,28 @@ class WatchActivity : ComponentActivity(), DataClient.OnDataChangedListener {
             gravity = Gravity.CENTER
         })
         mic = Button(this).apply {
+            isAllCaps = false
             text = "Продиктовать"
             setOnClickListener { dictate() }
         }
         content.addView(mic)
         input = EditText(this).apply {
-            hint = "Добавь задачу…"
+            hint = "Скажи или напиши"
             textSize = 15f
             filters = arrayOf(InputFilter.LengthFilter(WatchTaskSync.MAX_TEXT_LENGTH))
             maxLines = 3
             setText(store.getString("text", null))
         }
         content.addView(input, LinearLayout.LayoutParams(-1, -2))
-        send = Button(this).apply { setOnClickListener { submit() } }
+        send = Button(this).apply {
+            isAllCaps = false
+            setOnClickListener { confirmCommand() }
+        }
         content.addView(send)
         status = TextView(this).apply {
             gravity = Gravity.CENTER
             accessibilityLiveRegion = android.view.View.ACCESSIBILITY_LIVE_REGION_POLITE
-            text = store.getString("status", "Задачи сохраняются через телефон")
+            text = store.getString("status", "")
         }
         content.addView(status)
         val scroll = ScrollView(this).apply {
@@ -93,7 +103,17 @@ class WatchActivity : ComponentActivity(), DataClient.OnDataChangedListener {
             }
         }
         setContentView(scroll)
-        updateControls()
+        input.doAfterTextChanged {
+            if (pendingId() == null) {
+                refreshCommand()
+                status.text = when (val parsed = command) {
+                    null -> ""
+                    is Command.CreateTask, is Command.SetAlarm, is Command.SetTimer -> Describe.command(parsed)
+                    else -> "Попробуй: «Будильник на 10:30», «Таймер на 5 минут» или «Добавь задачу»."
+                }
+            }
+        }
+        refreshCommand()
     }
 
     override fun onStart() {
@@ -133,18 +153,56 @@ class WatchActivity : ComponentActivity(), DataClient.OnDataChangedListener {
         try {
             voice.launch(intent)
         } catch (_: ActivityNotFoundException) {
-            status.text = "Распознавание недоступно. Введите задачу текстом."
+            status.text = "Распознавание недоступно. Введи команду текстом."
         }
     }
 
-    private fun submit() {
+    private fun confirmCommand() {
         if (sending) return
-        val text = input.text.toString().trim()
-        if (text.isEmpty()) {
-            input.error = "Введите задачу"
+        if (pendingId() != null) {
+            submitTask()
             return
         }
+        // Recheck after editing and when the confirmation spans a change of date.
+        refreshCommand()
+        when (val parsed = command) {
+            is Command.CreateTask -> submitTask()
+            is Command.SetAlarm -> openClock(
+                Intent(AlarmClock.ACTION_SET_ALARM)
+                    .putExtra(AlarmClock.EXTRA_HOUR, parsed.hour)
+                    .putExtra(AlarmClock.EXTRA_MINUTES, parsed.minute)
+                    .putExtra(AlarmClock.EXTRA_MESSAGE, parsed.label)
+                    .apply {
+                        if (parsed.days.isNotEmpty()) {
+                            putExtra(AlarmClock.EXTRA_DAYS, ArrayList(parsed.days.sorted().map { it.value % 7 + 1 }))
+                        }
+                    },
+            )
+            is Command.SetTimer -> openClock(
+                Intent(AlarmClock.ACTION_SET_TIMER)
+                    .putExtra(AlarmClock.EXTRA_LENGTH, parsed.seconds)
+                    .putExtra(AlarmClock.EXTRA_MESSAGE, parsed.label),
+            )
+            else -> Unit
+        }
+    }
+
+    private fun openClock(intent: Intent) {
+        try {
+            startActivity(intent.putExtra(AlarmClock.EXTRA_SKIP_UI, true))
+            input.text.clear()
+            store.edit().remove("text").remove("status").apply()
+            status.text = "Команда передана в «Часы»."
+        } catch (_: ActivityNotFoundException) {
+            status.text = "Приложение «Часы» не принимает эту команду на этой модели."
+        } catch (_: SecurityException) {
+            status.text = "Часы не разрешили выполнить команду."
+        }
+    }
+
+    private fun submitTask() {
         val existingId = pendingId()
+        val text = input.text.toString().trim()
         val id = existingId ?: UUID.randomUUID().toString()
         val enteredAt = store.getString("enteredAt", null) ?: LocalDateTime.now().toString()
         val waiting = "В очереди. Ждём подтверждения телефона."
@@ -193,20 +251,33 @@ class WatchActivity : ComponentActivity(), DataClient.OnDataChangedListener {
         val update = store.edit().remove("id").remove("enteredAt").remove("requestUri").putString("status", message)
         if (success) update.remove("text")
         if (!update.commit()) return
-        status.text = message
         if (success) input.text.clear()
-        updateControls()
+        refreshCommand()
+        status.text = message
         requestUri?.let { data.deleteDataItems(it) }
         data.deleteDataItems(item.uri)
     }
 
     private fun pendingId(): String? = store.getString("id", null)
 
+    private fun refreshCommand() {
+        command = input.text.toString().trim().takeIf { it.isNotEmpty() }?.let { CommandParser.parse(it) }
+        updateControls()
+    }
+
     private fun updateControls() {
         val pending = pendingId() != null
         mic.isEnabled = !pending && !sending
         input.isEnabled = !pending && !sending
+        val label = when {
+            pending -> "Повторить отправку"
+            command is Command.CreateTask -> "Добавить на телефон"
+            command is Command.SetAlarm -> "Поставить будильник"
+            command is Command.SetTimer -> "Запустить таймер"
+            else -> null
+        }
+        send.visibility = if (label != null) android.view.View.VISIBLE else android.view.View.GONE
         send.isEnabled = !sending
-        send.text = if (pending) "Повторить отправку" else "Добавить задачу"
+        send.text = label.orEmpty()
     }
 }
