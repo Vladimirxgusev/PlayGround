@@ -224,7 +224,7 @@ internal fun EntryCard(
             if (entry.said.isNotEmpty()) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                        if (!entry.conversation) {
+                        if (!entry.conversation && entry.card == null) {
                             Text(entry.state.title, style = MaterialTheme.typography.labelMedium,
                                 color = if (failed) colors.error else colors.primary)
                         }
@@ -241,10 +241,11 @@ internal fun EntryCard(
                 }
             }
             SelectionContainer {
-                Text(
-                    entry.result, style = MaterialTheme.typography.bodyLarge,
-                    color = colors.onSurface,
-                )
+                if (entry.card != null) {
+                    InfoCardView(entry.card)
+                } else {
+                    Text(entry.result, style = MaterialTheme.typography.bodyLarge, color = colors.onSurface)
+                }
             }
             if ((entry.conversation && entry.viaAi) || entry.undo != null) {
                 Row(Modifier.padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {

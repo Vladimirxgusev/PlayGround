@@ -31,7 +31,6 @@ import app.pomoshnik.core.Command
 import app.pomoshnik.core.CommandParser
 import app.pomoshnik.core.CommandState
 import java.util.UUID
-import app.pomoshnik.core.InfoFormat
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.first
 import java.time.LocalDateTime
@@ -467,7 +466,7 @@ open class MainActivity : ComponentActivity() {
                 addEntry(said, outcome, viaAi)
             }
             is Command.Unknown -> addEntry(said, Outcome(false, command.reason), viaAi)
-            is Command.Now -> answer(said, viaAi) { InfoFormat.now(command.kind, LocalDateTime.now()) }
+            is Command.Now -> answer(said, viaAi) { info.now(command.kind, LocalDateTime.now()) }
             is Command.Currency -> answer(said, viaAi) { info.rates(command) }
             is Command.Answer -> showReply(said, command.text, viaAi = true)
             is Command.Question -> replyTo(said, command.text)
@@ -502,18 +501,25 @@ open class MainActivity : ComponentActivity() {
     }
 
     /** Fetches an answer, shows it and (if enabled) reads it aloud. */
-    private fun answer(said: String, viaAi: Boolean, fetch: suspend () -> String) {
+    private fun answer(said: String, viaAi: Boolean, fetch: suspend () -> InfoReply) {
         lifecycleScope.launch {
             busy = true
-            val outcome = try {
-                Outcome(true, fetch())
+            val reply = try {
+                fetch()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
-                Outcome(false, "Не получилось ответить: ${e.message}")
+                val message = "Не получилось ответить: ${e.message}"
+                addEntry(said, Outcome(false, message), viaAi)
+                if (settings.speakAnswers) speaker.speak(message)
+                return@launch
             } finally {
                 busy = false
             }
-            addEntry(said, outcome, viaAi)
-            if (settings.speakAnswers) speaker.speak(outcome.message)
+            commandHistory.put(Entry(
+                UUID.randomUUID().toString(), said, reply.text, CommandState.DONE, viaAi, card = reply.card,
+            ))
+            if (settings.speakAnswers) speaker.speak(reply.text)
         }
     }
 

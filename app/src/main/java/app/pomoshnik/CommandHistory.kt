@@ -18,6 +18,7 @@ data class Entry(
     val viaAi: Boolean = false,
     val undo: UndoAction? = null,
     val conversation: Boolean = false,
+    val card: InfoCard? = null,
 )
 
 internal class CommandHistory(context: Context) {
@@ -31,7 +32,7 @@ internal class CommandHistory(context: Context) {
                 UndoAction(UndoAction.Kind.valueOf(it.getString("kind")), it.getString("id"))
             }
             Entry(row.getString("id"), row.getString("text"), row.getString("result"),
-                CommandState.valueOf(row.getString("state")), row.optBoolean("ai"), undo, row.optBoolean("conversation"))
+                CommandState.valueOf(row.getString("state")), row.optBoolean("ai"), undo, row.optBoolean("conversation"), row.optJSONObject("card")?.let(InfoCard::decode))
         }
     }
 
@@ -44,7 +45,7 @@ internal class CommandHistory(context: Context) {
         for (item in updated) {
             json.put(JSONObject().put("id", item.id).put("text", item.said).put("result", item.result)
                 .put("state", item.state.name).put("ai", item.viaAi)
-                .put("conversation", item.conversation).put("undo", item.undo?.let {
+                .put("conversation", item.conversation).put("card", item.card?.encode()).put("undo", item.undo?.let {
                     JSONObject().put("kind", it.kind.name).put("id", it.id)
                 }))
         }

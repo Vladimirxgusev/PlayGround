@@ -13,6 +13,7 @@ import androidx.core.content.ContextCompat
 import app.pomoshnik.core.CityNames
 import app.pomoshnik.core.Command
 import app.pomoshnik.core.InfoFormat
+import app.pomoshnik.core.Describe
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -23,9 +24,13 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
 import java.time.LocalDate
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
 import java.time.OffsetDateTime
 import java.util.Locale
 import kotlin.coroutines.resume
+import kotlin.math.abs
+import kotlin.math.roundToInt
 
 /**
  * Answers informational questions from free services that work in Russia without keys:
@@ -37,7 +42,7 @@ class InfoService(private val context: Context, private val settings: Settings) 
 
     // --- Weather ---
 
-    suspend fun weather(c: Command.Weather): String {
+    suspend fun weather(c: Command.Weather): InfoReply {
         val today = LocalDate.now()
         val date = c.date ?: today
         if (date.isBefore(today)) throw IOException("прогноз бывает только на будущее")
@@ -53,6 +58,7 @@ class InfoService(private val context: Context, private val settings: Settings) 
 
         val url = "https://api.open-meteo.com/v1/forecast?latitude=${place.lat}&longitude=${place.lon}" +
             "&current=temperature_2m,apparent_temperature,weather_code,wind_speed_10m" +
+            "&hourly=temperature_2m" +
             "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max" +
             "&wind_speed_unit=ms&timezone=auto&forecast_days=7"
         val json = JSONObject(get(url))
@@ -78,7 +84,31 @@ class InfoService(private val context: Context, private val settings: Settings) 
             max = daily.getJSONArray("temperature_2m_max").getDouble(index),
             precipitationChance = chance,
         )
-        return InfoFormat.weather(place.name, today, current, day)
+        val now = current.takeIf { date == today }
+        val weatherCode = now?.code ?: day.code
+        val temps = json.optJSONObject("hourly")?.let { hourly ->
+            val times = hourly.optJSONArray("time") ?: return@let emptyList()
+            val values = hourly.optJSONArray("temperature_2m") ?: return@let emptyList()
+            val indexes = (0 until times.length()).filter { times.optString(it).startsWith("${date}T") }
+            indexes.map(values::optDouble).takeIf { it.all(Double::isFinite) }
+        }.orEmpty()
+        return InfoReply(
+            InfoFormat.weather(place.name, today, current, day),
+            InfoCard(
+                kind = InfoCard.Kind.WEATHER,
+                title = place.name,
+                subtitle = "${Describe.date(date, today)} · ${InfoFormat.sky(weatherCode)}",
+                headline = now?.let { InfoFormat.temp(it.temperature) }
+                    ?: "${InfoFormat.temp(day.min)} … ${InfoFormat.temp(day.max)}",
+                metrics = buildList {
+                    add(InfoCard.Metric("Мин. / макс.", "${InfoFormat.temp(day.min)} / ${InfoFormat.temp(day.max)}"))
+                    now?.let { add(InfoCard.Metric("Ветер", "${it.windMs.roundToInt()} м/с")) }
+                    day.precipitationChance?.let { add(InfoCard.Metric("Осадки", "$it%")) }
+                },
+                weatherCode = weatherCode,
+                temperatures = temps,
+            ),
+        )
     }
 
     /** Looks up every likely nominative form and keeps the most populous match. */
@@ -134,7 +164,7 @@ class InfoService(private val context: Context, private val settings: Settings) 
 
     // --- Exchange rates ---
 
-    suspend fun rates(c: Command.Currency): String {
+    suspend fun rates(c: Command.Currency): InfoReply {
         val json = JSONObject(get("https://www.cbr-xml-daily.ru/daily_json.js"))
         val valute = json.getJSONObject("Valute")
         val date = runCatching { OffsetDateTime.parse(json.getString("Date")).toLocalDate() }.getOrElse { LocalDate.now() }
@@ -150,8 +180,50 @@ class InfoService(private val context: Context, private val settings: Settings) 
             }
         }
         if (rates.isEmpty()) throw IOException("ЦБ не публикует курс ${c.codes.joinToString(", ")}")
-        return InfoFormat.rates(rates, date, c.amount)
+        val money = java.text.NumberFormat.getNumberInstance(Locale.forLanguageTag("ru-RU")).apply {
+            minimumFractionDigits = 2
+            maximumFractionDigits = 2
+        }
+        val units = java.text.NumberFormat.getNumberInstance(Locale.forLanguageTag("ru-RU"))
+        return InfoReply(
+            InfoFormat.rates(rates, date, c.amount),
+            InfoCard(
+                InfoCard.Kind.RATES, if (c.amount == null) "Курсы валют" else "Конвертация в рубли",
+                "Курс ЦБ · ${formatDate(date)}",
+                metrics = rates.filter { it.nominal > 0 }.map { rate ->
+                    val unitsToConvert = c.amount ?: rate.nominal.toDouble()
+                    val rubles = unitsToConvert * rate.value / rate.nominal
+                    val change = rate.previous?.let { (rate.value - it) * unitsToConvert / rate.nominal }
+                    val trend = when {
+                        change == null || abs(change) < 0.005 -> 0
+                        change > 0 -> 1
+                        else -> -1
+                    }
+                    val detail = when {
+                        change == null -> null
+                        trend == 0 -> "Без изменения к прошлому курсу"
+                        else -> "${if (trend > 0) "+" else "−"}${money.format(abs(change))} ₽ к прошлому курсу"
+                    }
+                    InfoCard.Metric("${units.format(unitsToConvert)} ${rate.code}", "${money.format(rubles)} ₽", detail, trend)
+                },
+            ),
+        )
     }
+
+    fun now(kind: Command.Now.Kind, now: LocalDateTime): InfoReply {
+        val date = now.toLocalDate()
+        val time = now.toLocalTime().format(DateTimeFormatter.ofPattern("HH:mm"))
+        val card = when (kind) {
+            Command.Now.Kind.TIME -> InfoCard(InfoCard.Kind.TIME, "Местное время", formatDate(date), time)
+            Command.Now.Kind.DATE -> InfoCard(InfoCard.Kind.DATE, "Сегодня", date.format(
+                DateTimeFormatter.ofPattern("EEEE, yyyy", Locale.forLanguageTag("ru-RU")),
+            ), date.format(DateTimeFormatter.ofPattern("d MMMM", Locale.forLanguageTag("ru-RU"))))
+        }
+        return InfoReply(InfoFormat.now(kind, now), card)
+    }
+
+    private fun formatDate(date: LocalDate): String =
+        date.format(DateTimeFormatter.ofPattern("d MMMM yyyy", Locale.forLanguageTag("ru-RU")))
 
     private suspend fun get(url: String): String = withContext(Dispatchers.IO) {
         val conn = (URL(url).openConnection() as HttpURLConnection).apply {
